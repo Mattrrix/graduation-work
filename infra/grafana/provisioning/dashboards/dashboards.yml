@@ -1,0 +1,10 @@
+apiVersion: 1
+providers:
+  - name: ETL pipeline
+    type: file
+    folder: ETL
+    updateIntervalSeconds: 10
+    allowUiUpdates: true
+    options:
+      path: /etc/grafana/provisioning/dashboards
+      foldersFromFilesStructure: false

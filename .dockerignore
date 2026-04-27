@@ -1,0 +1,12 @@
+.git
+.idea
+.vscode
+.DS_Store
+
+**/__pycache__
+**/*.pyc
+**/.venv
+**/venv
+
+services/ui/node_modules
+services/ui/dist

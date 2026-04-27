@@ -1,0 +1,147 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-etl}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-etl}
+      POSTGRES_DB: ${POSTGRES_DB:-etl}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./infra/postgres/init.sql:/docker-entrypoint-initdb.d/00-init.sql:ro
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-etl} -d ${POSTGRES_DB:-etl}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.5.3
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+
+  kafka:
+    image: confluentinc/cp-kafka:7.5.3
+    depends_on: [zookeeper]
+    ports:
+      - "29092:29092"
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_LISTENERS: INTERNAL://0.0.0.0:9092,EXTERNAL://0.0.0.0:29092
+      KAFKA_ADVERTISED_LISTENERS: INTERNAL://kafka:9092,EXTERNAL://localhost:29092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: INTERNAL:PLAINTEXT,EXTERNAL:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: INTERNAL
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+    healthcheck:
+      test: ["CMD-SHELL", "kafka-broker-api-versions --bootstrap-server localhost:9092 >/dev/null 2>&1"]
+      interval: 10s
+      timeout: 10s
+      retries: 12
+
+  extract:
+    build: ./services/extract
+    depends_on:
+      postgres: { condition: service_healthy }
+      kafka: { condition: service_healthy }
+    environment:
+      POSTGRES_DSN: postgresql+asyncpg://${POSTGRES_USER:-etl}:${POSTGRES_PASSWORD:-etl}@postgres:5432/${POSTGRES_DB:-etl}
+      KAFKA_BOOTSTRAP: kafka:9092
+      KAFKA_TOPIC_RAW: ${KAFKA_TOPIC_RAW:-raw-docs}
+      STORAGE_DIR: /data/files
+    volumes:
+      - storage_data:/data/files
+    ports:
+      - "${EXTRACT_PORT:-8001}:8000"
+
+  transform:
+    build: ./services/transform
+    depends_on:
+      postgres: { condition: service_healthy }
+      kafka: { condition: service_healthy }
+    environment:
+      POSTGRES_DSN: postgresql+asyncpg://${POSTGRES_USER:-etl}:${POSTGRES_PASSWORD:-etl}@postgres:5432/${POSTGRES_DB:-etl}
+      KAFKA_BOOTSTRAP: kafka:9092
+      KAFKA_TOPIC_RAW: ${KAFKA_TOPIC_RAW:-raw-docs}
+      KAFKA_GROUP_ID: transform-mvp
+
+  api:
+    build:
+      context: .
+      dockerfile: services/api/Dockerfile
+    depends_on:
+      postgres: { condition: service_healthy }
+    environment:
+      POSTGRES_DSN: postgresql+asyncpg://${POSTGRES_USER:-etl}:${POSTGRES_PASSWORD:-etl}@postgres:5432/${POSTGRES_DB:-etl}
+      JWT_SECRET: ${JWT_SECRET:-please-change-me}
+      JWT_EXPIRES_MIN: ${JWT_EXPIRES_MIN:-60}
+      ADMIN_USERNAME: ${ADMIN_USERNAME:-admin}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-admin}
+      EXTRACT_URL: http://extract:8000
+      STORAGE_DIR: /data/files
+    volumes:
+      - storage_data:/data/files
+    ports:
+      - "${API_PORT:-8000}:8000"
+
+  ui:
+    build:
+      context: ./services/ui
+      args:
+        VITE_API_BASE: /api
+    depends_on: [api]
+    ports:
+      - "${UI_PORT:-5173}:80"
+
+  kafka-exporter:
+    image: danielqsj/kafka-exporter:v1.7.0
+    command:
+      - --kafka.server=kafka:9092
+    depends_on:
+      kafka: { condition: service_healthy }
+
+  prometheus:
+    image: prom/prometheus:v2.50.1
+    volumes:
+      - ./infra/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    ports:
+      - "9090:9090"
+
+  loki:
+    image: grafana/loki:3.3.2
+    command: -config.file=/etc/loki/loki-config.yml
+    volumes:
+      - ./infra/loki/loki-config.yml:/etc/loki/loki-config.yml:ro
+      - loki_data:/loki
+
+  promtail:
+    image: grafana/promtail:3.3.2
+    command: -config.file=/etc/promtail/promtail-config.yml
+    volumes:
+      - ./infra/promtail/promtail-config.yml:/etc/promtail/promtail-config.yml:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - promtail_positions:/var/lib/promtail
+    depends_on: [loki]
+
+  grafana:
+    image: grafana/grafana:10.4.2
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: admin
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+    volumes:
+      - ./infra/grafana/provisioning:/etc/grafana/provisioning:ro
+      - grafana_data:/var/lib/grafana
+    ports:
+      - "3001:3000"
+    depends_on: [prometheus, loki]
+
+volumes:
+  postgres_data:
+  storage_data:
+  grafana_data:
+  loki_data:
+  promtail_positions:

@@ -1,0 +1,508 @@
+{
+  "uid": "etl-pipeline",
+  "title": "ETL Pipeline",
+  "tags": ["etl", "thesis"],
+  "timezone": "Europe/Moscow",
+  "schemaVersion": 39,
+  "version": 4,
+  "refresh": "10s",
+  "time": { "from": "now-1h", "to": "now" },
+  "templating": { "list": [] },
+  "annotations": { "list": [] },
+  "panels": [
+    {
+      "id": 1,
+      "type": "stat",
+      "title": "Загружено новых",
+      "description": "Сколько уникальных файлов прошло через extract. Не учитывает дубли и ошибки.",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 4, "w": 6, "x": 0, "y": 0 },
+      "targets": [
+        {
+          "expr": "sum(extract_uploads_total{result=\"new\"})",
+          "refId": "A",
+          "legendFormat": "новые"
+        }
+      ],
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"] },
+        "colorMode": "value",
+        "graphMode": "area",
+        "textMode": "auto"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "fixed", "fixedColor": "blue" },
+          "unit": "short",
+          "noValue": "0"
+        }
+      }
+    },
+    {
+      "id": 2,
+      "type": "stat",
+      "title": "С ошибками",
+      "description": "Документы со статусом failed: extract не смог распарсить файл (битый PDF / пустой файл) либо kafka publish упал.",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 4, "w": 6, "x": 6, "y": 0 },
+      "targets": [
+        {
+          "expr": "sum(extract_uploads_total{result=~\"parse_failed|kafka_failed\"})",
+          "refId": "A",
+          "legendFormat": "ошибок"
+        }
+      ],
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"] },
+        "colorMode": "value",
+        "graphMode": "area",
+        "textMode": "auto"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "red", "value": 1 }
+            ]
+          },
+          "unit": "short",
+          "noValue": "0"
+        }
+      }
+    },
+    {
+      "id": 3,
+      "type": "stat",
+      "title": "Обработано успешно",
+      "description": "Документы дошли до статуса loaded — классифицированы, NER без ошибок, записаны в БД.",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 4, "w": 6, "x": 12, "y": 0 },
+      "targets": [
+        {
+          "expr": "sum(transform_processed_total{status=\"loaded\"})",
+          "refId": "A",
+          "legendFormat": "loaded"
+        }
+      ],
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"] },
+        "colorMode": "value",
+        "graphMode": "area",
+        "textMode": "auto"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "fixed", "fixedColor": "green" },
+          "unit": "short",
+          "noValue": "0"
+        }
+      }
+    },
+    {
+      "id": 4,
+      "type": "stat",
+      "title": "С предупреждением",
+      "description": "Документы со статусом validated_with_errors: тип не распознан, нет обязательных бизнес-полей, либо невалидный ИНН/дата/сумма.",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 4, "w": 6, "x": 18, "y": 0 },
+      "targets": [
+        {
+          "expr": "sum(transform_processed_total{status=\"validated_with_errors\"})",
+          "refId": "A",
+          "legendFormat": "warnings"
+        }
+      ],
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"] },
+        "colorMode": "value",
+        "graphMode": "area",
+        "textMode": "auto"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "orange", "value": 1 }
+            ]
+          },
+          "unit": "short",
+          "noValue": "0"
+        }
+      }
+    },
+    {
+      "id": 5,
+      "type": "timeseries",
+      "title": "Throughput (документов/мин)",
+      "description": "Скорость обработки на каждом этапе. rate(...[1m]) — производная счётчика за последнюю минуту, *60 переводит в docs/min.",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 4 },
+      "targets": [
+        {
+          "expr": "sum(rate(extract_uploads_total{result=\"new\"}[1m])) * 60",
+          "legendFormat": "Extract: новые загрузки",
+          "refId": "A"
+        },
+        {
+          "expr": "sum(rate(transform_processed_total[1m])) * 60",
+          "legendFormat": "Transform: всего обработано",
+          "refId": "B"
+        },
+        {
+          "expr": "sum(rate(transform_processed_total{status=\"loaded\"}[1m])) * 60",
+          "legendFormat": "Transform: успешно",
+          "refId": "C"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 12,
+            "showPoints": "never",
+            "lineInterpolation": "smooth"
+          }
+        },
+        "overrides": [
+          { "matcher": { "id": "byName", "options": "Extract: новые загрузки" },
+            "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "blue" } }] },
+          { "matcher": { "id": "byName", "options": "Transform: всего обработано" },
+            "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "purple" } }] },
+          { "matcher": { "id": "byName", "options": "Transform: успешно" },
+            "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "green" } }] }
+        ]
+      },
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom" },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      }
+    },
+    {
+      "id": 6,
+      "type": "timeseries",
+      "title": "Latency (P50 / P95)",
+      "description": "Длительность одной операции. histogram_quantile(0.95, ...) даёт перцентиль из histogram-метрики: «95% запросов уложились в это время или меньше».",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 4 },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.5, sum(rate(extract_parse_seconds_bucket[5m])) by (le))",
+          "legendFormat": "Extract парсинг P50",
+          "refId": "A"
+        },
+        {
+          "expr": "histogram_quantile(0.95, sum(rate(extract_parse_seconds_bucket[5m])) by (le))",
+          "legendFormat": "Extract парсинг P95",
+          "refId": "B"
+        },
+        {
+          "expr": "histogram_quantile(0.5, sum(rate(transform_process_seconds_bucket[5m])) by (le))",
+          "legendFormat": "Transform обработка P50",
+          "refId": "C"
+        },
+        {
+          "expr": "histogram_quantile(0.95, sum(rate(transform_process_seconds_bucket[5m])) by (le))",
+          "legendFormat": "Transform обработка P95",
+          "refId": "D"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 0,
+            "showPoints": "never"
+          }
+        },
+        "overrides": [
+          { "matcher": { "id": "byName", "options": "Extract парсинг P50" },
+            "properties": [
+              { "id": "color", "value": { "mode": "fixed", "fixedColor": "light-blue" } },
+              { "id": "custom.lineStyle", "value": { "fill": "dash", "dash": [6, 4] } }
+            ] },
+          { "matcher": { "id": "byName", "options": "Extract парсинг P95" },
+            "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "blue" } }] },
+          { "matcher": { "id": "byName", "options": "Transform обработка P50" },
+            "properties": [
+              { "id": "color", "value": { "mode": "fixed", "fixedColor": "light-orange" } },
+              { "id": "custom.lineStyle", "value": { "fill": "dash", "dash": [6, 4] } }
+            ] },
+          { "matcher": { "id": "byName", "options": "Transform обработка P95" },
+            "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "orange" } }] }
+        ]
+      },
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom" },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      }
+    },
+    {
+      "id": 7,
+      "type": "timeseries",
+      "title": "Error rate (% от потока)",
+      "description": "Доля ошибок относительно общего потока. clamp_min(...,0.0001) — защита от деления на 0 в простое.",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 12 },
+      "targets": [
+        {
+          "expr": "sum(rate(extract_uploads_total{result=~\"parse_failed|kafka_failed\"}[5m])) / clamp_min(sum(rate(extract_uploads_total{result!=\"\"}[5m])), 0.0001) * 100",
+          "legendFormat": "Extract: ошибки парсинга/Kafka",
+          "refId": "A"
+        },
+        {
+          "expr": "sum(rate(transform_processed_total{status=~\"error|validated_with_errors\"}[5m])) / clamp_min(sum(rate(transform_processed_total[5m])), 0.0001) * 100",
+          "legendFormat": "Transform: ошибки валидации/обработки",
+          "refId": "B"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "max": 100,
+          "min": 0,
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 18,
+            "showPoints": "never"
+          }
+        },
+        "overrides": [
+          { "matcher": { "id": "byName", "options": "Extract: ошибки парсинга/Kafka" },
+            "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "orange" } }] },
+          { "matcher": { "id": "byName", "options": "Transform: ошибки валидации/обработки" },
+            "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "red" } }] }
+        ]
+      },
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom" },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      }
+    },
+    {
+      "id": 8,
+      "type": "piechart",
+      "title": "Распределение по типам документов",
+      "description": "Сумма всех успешно загруженных документов, разбитых по результату классификации (regex по тексту/имени файла).",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 12 },
+      "targets": [
+        {
+          "expr": "sum by (doc_type) (transform_processed_total{status=\"loaded\"})",
+          "legendFormat": "{{doc_type}}",
+          "refId": "A"
+        }
+      ],
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "right",
+          "values": ["value", "percent"]
+        },
+        "pieType": "donut",
+        "reduceOptions": { "calcs": ["lastNotNull"] }
+      },
+      "fieldConfig": {
+        "defaults": { "unit": "short", "color": { "mode": "palette-classic" } },
+        "overrides": [
+          { "matcher": { "id": "byName", "options": "act" },
+            "properties": [
+              { "id": "displayName", "value": "Акт" },
+              { "id": "color", "value": { "mode": "fixed", "fixedColor": "green" } }
+            ] },
+          { "matcher": { "id": "byName", "options": "contract" },
+            "properties": [
+              { "id": "displayName", "value": "Договор" },
+              { "id": "color", "value": { "mode": "fixed", "fixedColor": "blue" } }
+            ] },
+          { "matcher": { "id": "byName", "options": "invoice" },
+            "properties": [
+              { "id": "displayName", "value": "Счёт-фактура" },
+              { "id": "color", "value": { "mode": "fixed", "fixedColor": "purple" } }
+            ] },
+          { "matcher": { "id": "byName", "options": "waybill" },
+            "properties": [
+              { "id": "displayName", "value": "ТОРГ-12" },
+              { "id": "color", "value": { "mode": "fixed", "fixedColor": "yellow" } }
+            ] },
+          { "matcher": { "id": "byName", "options": "upd" },
+            "properties": [
+              { "id": "displayName", "value": "УПД" },
+              { "id": "color", "value": { "mode": "fixed", "fixedColor": "orange" } }
+            ] },
+          { "matcher": { "id": "byName", "options": "payment_order" },
+            "properties": [
+              { "id": "displayName", "value": "Платёжное поручение" },
+              { "id": "color", "value": { "mode": "fixed", "fixedColor": "light-blue" } }
+            ] },
+          { "matcher": { "id": "byName", "options": "unknown" },
+            "properties": [
+              { "id": "displayName", "value": "Неизвестный" },
+              { "id": "color", "value": { "mode": "fixed", "fixedColor": "red" } }
+            ] }
+        ]
+      }
+    },
+    {
+      "id": 9,
+      "type": "timeseries",
+      "title": "Kafka consumer lag (raw-docs)",
+      "description": "Сколько сообщений ещё не прочитано consumer-группой. Растущий lag = consumers отстают, надо масштабировать.",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 20 },
+      "targets": [
+        {
+          "expr": "sum by (consumergroup) (kafka_consumergroup_lag{topic=\"raw-docs\"})",
+          "legendFormat": "{{consumergroup}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 14,
+            "showPoints": "never"
+          },
+          "color": { "mode": "fixed", "fixedColor": "blue" }
+        }
+      },
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom" },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      }
+    },
+    {
+      "id": 10,
+      "type": "timeseries",
+      "title": "Загрузки по результатам (docs/min)",
+      "description": "Раскладка входящего потока: сколько новых, дублей и ошибок в минуту. Stacked area — сумма даёт общий поток в extract.",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 20 },
+      "targets": [
+        {
+          "expr": "sum by (result) (rate(extract_uploads_total{result!=\"\"}[1m])) * 60",
+          "legendFormat": "{{result}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 30,
+            "stacking": { "mode": "normal" },
+            "showPoints": "never"
+          }
+        },
+        "overrides": [
+          { "matcher": { "id": "byName", "options": "new" },
+            "properties": [
+              { "id": "displayName", "value": "Новые" },
+              { "id": "color", "value": { "mode": "fixed", "fixedColor": "green" } }
+            ] },
+          { "matcher": { "id": "byName", "options": "deduplicated" },
+            "properties": [
+              { "id": "displayName", "value": "Дубли" },
+              { "id": "color", "value": { "mode": "fixed", "fixedColor": "yellow" } }
+            ] },
+          { "matcher": { "id": "byName", "options": "parse_failed" },
+            "properties": [
+              { "id": "displayName", "value": "Ошибка парсинга" },
+              { "id": "color", "value": { "mode": "fixed", "fixedColor": "orange" } }
+            ] },
+          { "matcher": { "id": "byName", "options": "kafka_failed" },
+            "properties": [
+              { "id": "displayName", "value": "Ошибка Kafka" },
+              { "id": "color", "value": { "mode": "fixed", "fixedColor": "red" } }
+            ] }
+        ]
+      },
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom" },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      }
+    },
+    {
+      "id": 11,
+      "type": "timeseries",
+      "title": "Темп лог-событий (events/min)",
+      "description": "Частота лог-строк по уровням за последнюю минуту. **ERROR/CRITICAL** — настоящие ошибки приложения (исключения в коде, Kafka недоступна и т.п.). **WARNING** — бизнес-кейсы и валидационные отклонения (битый PDF, пустой файл, неподдерживаемый формат — корректно отвергается с HTTP 4xx). Пустой график = pipeline здоровый.",
+      "datasource": { "type": "loki", "uid": "loki" },
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 28 },
+      "targets": [
+        {
+          "expr": "sum by (service) (rate({project=\"graduation-work\", service=~\"api|extract|transform\"} |~ \"\\\\b(ERROR|CRITICAL|Traceback)\\\\b\" [1m])) * 60",
+          "legendFormat": "Ошибки приложения · {{service}}",
+          "refId": "A"
+        },
+        {
+          "expr": "sum by (service) (rate({project=\"graduation-work\", service=~\"api|extract|transform\"} |~ \"\\\\bWARNING\\\\b\" [1m])) * 60",
+          "legendFormat": "Бизнес-отклонения · {{service}}",
+          "refId": "B"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0,
+          "noValue": "Нет событий",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 14,
+            "showPoints": "never"
+          }
+        },
+        "overrides": [
+          { "matcher": { "id": "byRegexp", "options": "^Ошибки приложения" },
+            "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "red" } }] },
+          { "matcher": { "id": "byRegexp", "options": "^Бизнес-отклонения" },
+            "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "orange" } }] }
+        ]
+      },
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom" },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      }
+    },
+    {
+      "id": 12,
+      "type": "logs",
+      "title": "Live logs · api / extract / transform",
+      "description": "Хвост логов сервисов pipeline. Сортировка свежие сверху, время по Москве. Для глубокого поиска по тексту — кнопка «Explore» справа от заголовка панели.",
+      "datasource": { "type": "loki", "uid": "loki" },
+      "gridPos": { "h": 14, "w": 24, "x": 0, "y": 36 },
+      "targets": [
+        {
+          "expr": "{project=\"graduation-work\", service=~\"api|extract|transform\"}",
+          "refId": "A"
+        }
+      ],
+      "options": {
+        "showTime": true,
+        "showLabels": false,
+        "showCommonLabels": false,
+        "wrapLogMessage": true,
+        "prettifyLogMessage": false,
+        "enableLogDetails": true,
+        "dedupStrategy": "none",
+        "sortOrder": "Descending"
+      }
+    }
+  ]
+}
