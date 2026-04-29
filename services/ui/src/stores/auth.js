@@ -19,6 +19,7 @@ function persistProfile(p) {
 export const useAuthStore = defineStore('auth', {
   state: () => ({
     token: localStorage.getItem('token') || '',
+    refreshToken: localStorage.getItem('refresh_token') || '',
     username: localStorage.getItem('username') || '',
     role: localStorage.getItem('role') || '',
     profile: loadProfile(),
@@ -48,9 +49,11 @@ export const useAuthStore = defineStore('auth', {
         headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
       })
       this.token = data.access_token
+      this.refreshToken = data.refresh_token
       this.role = data.role
-      this.username = username
+      this.username = data.username || username
       localStorage.setItem('token', this.token)
+      localStorage.setItem('refresh_token', this.refreshToken)
       localStorage.setItem('role', this.role)
       localStorage.setItem('username', this.username)
       await this.fetchProfile()
@@ -83,12 +86,18 @@ export const useAuthStore = defineStore('auth', {
       return data
     },
 
-    logout() {
+    async logout() {
+      const refresh = this.refreshToken || localStorage.getItem('refresh_token') || ''
+      try {
+        await client.post('/auth/logout', { refresh_token: refresh })
+      } catch {}
       this.token = ''
+      this.refreshToken = ''
       this.role = ''
       this.username = ''
       this.profile = {}
       localStorage.removeItem('token')
+      localStorage.removeItem('refresh_token')
       localStorage.removeItem('role')
       localStorage.removeItem('username')
       localStorage.removeItem(STORAGE_KEY)

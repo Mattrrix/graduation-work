@@ -26,3 +26,29 @@ scrape_configs:
     static_configs:
       - targets: ['kafka-exporter:9308']
     metrics_path: /metrics
+
+  - job_name: redis
+    static_configs:
+      - targets: ['redis-exporter:9121']
+    metrics_path: /metrics
+
+  - job_name: cadvisor
+    static_configs:
+      - targets: ['cadvisor:8080']
+    metrics_path: /metrics
+    # Docker Desktop на macOS не пробрасывает /var/lib/docker из LinuxKit VM,
+    # поэтому cadvisor работает через Raw-фактори (cgroups) и не получает docker-меток.
+    # Извлекаем короткий container_id из cgroup-path /docker/<hash> через relabel.
+    metric_relabel_configs:
+      - source_labels: [id]
+        regex: '/docker/([a-f0-9]{12})[a-f0-9]+'
+        target_label: container_id
+        replacement: '$1'
+      - source_labels: [id]
+        regex: '^/docker$'
+        target_label: container_id
+        replacement: 'all-containers'
+      - source_labels: [id]
+        regex: '^/$'
+        target_label: container_id
+        replacement: 'host-vm'

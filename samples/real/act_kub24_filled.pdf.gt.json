@@ -1,0 +1,12 @@
+{
+  "doc_type": "act",
+  "doc_number": "24",
+  "doc_date": "2016-07-01",
+  "amount_total": "2500000.00",
+  "primary_inn": "7722737745",
+  "primary_kpp": "773301001",
+  "primary_name": "ООО \"ВАСИЛЕК\"",
+  "all_inns": ["7722737745", "7756037390"],
+  "_source": "https://kub-24.ru/wp-content/uploads/Akt_ob_okazanii_uslug_-_24_ot_01_iyulya_2016_g__2016_07_15_17_33_51_646.pdf",
+  "_notes": "Образец акта оказания услуг. Исполнитель = ООО ВАСИЛЕК (primary). Заказчик = ООО ЛАГУНА. НДС 381 355.93 при общей сумме 2 500 000."
+}

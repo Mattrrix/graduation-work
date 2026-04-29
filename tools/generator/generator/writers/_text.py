@@ -51,7 +51,7 @@ def party_block(party: dict) -> list[str]:
 
 
 def items_table(items: list[dict]) -> list[list[str]]:
-    rows = [["№", "Наименование", "Ед.", "Кол-во", "Цена", "Сумма", "НДС 20%"]]
+    rows = [["№", "Наименование", "Ед.", "Кол-во", "Цена", "Сумма", "НДС 22%"]]
     for i, it in enumerate(items, 1):
         rows.append([str(i), it["name"], it["unit"], str(it["qty"]), it["price"], it["sum"], it["vat"]])
     return rows

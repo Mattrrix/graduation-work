@@ -5,7 +5,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from prometheus_client import make_asgi_app
 
-from . import auth, db
+from . import auth, db, redis_client
 from .routes import admin as admin_routes
 from .routes import auth as auth_routes
 from .routes import documents as documents_routes
@@ -17,10 +17,12 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await db.init_pool()
+    await redis_client.init_redis()
     await auth.ensure_admin_seed()
     try:
         yield
     finally:
+        await redis_client.close_redis()
         await db.close_pool()
 
 

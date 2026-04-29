@@ -1,4 +1,4 @@
-.PHONY: up down logs ps rebuild clean clean-metrics clean-logs clean-obs psql ai-up ai-down ai-status ai-restart
+.PHONY: up down logs ps rebuild clean clean-metrics clean-logs clean-obs psql ai-up ai-down ai-status ai-restart bench
 
 # Поднять весь стек (build + up). Идемпотентно — повторный вызов
 # пересобирает образы только если поменялся код или Dockerfile.
@@ -80,3 +80,12 @@ ai-status:
 
 ai-restart:
 	bash infra/ai/serve.sh restart
+
+# Phase 8 LLM-bench: сравнение mlx-local vs GigaChat на синтетике + реальных PDF
+# из samples/real/. Должен быть поднят mlx_lm.server :8112 (make ai-up) и
+# заполнен GIGACHAT_AUTH_KEY в .env. Использует .venv_ai с deps (httpx,
+# pdfplumber, python-docx, openpyxl, pandas, pydantic-settings, reportlab).
+# Подробнее — tools/llm_bench/README.md, отчёт — docs/llm-comparison.md.
+bench:
+	QWEN_URL=http://localhost:8112 .venv_ai/bin/python tools/llm_bench/run.py \
+		--count 5 --backends mlx,gigachat --real-dir samples/real

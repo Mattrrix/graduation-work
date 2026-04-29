@@ -55,8 +55,7 @@ async def consume(stop_event: asyncio.Event) -> None:
                     try:
                         with process_seconds.time():
                             async with pool.acquire() as conn:
-                                async with conn.transaction():
-                                    result = await process(conn, record.value)
+                                result = await process(conn, record.value)
                         processed.labels(
                             status=result["status"],
                             doc_type=result["doc_type"],

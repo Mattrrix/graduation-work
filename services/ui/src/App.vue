@@ -26,8 +26,8 @@ const pageTitle = computed(() => {
 const isDark = computed(() => theme.global.current.value.dark)
 const isPublic = computed(() => route.meta?.public)
 
-function logout() {
-  auth.logout()
+async function logout() {
+  await auth.logout()
   router.push('/login')
 }
 

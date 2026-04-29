@@ -24,6 +24,25 @@ export const DOC_TYPE_LABELS = {
   upd: 'УПД',
 }
 
+export const DATE_ROLE_LABELS = {
+  doc_date: 'Дата документа',
+  due_date: 'Срок оплаты',
+  delivery_date: 'Дата поставки',
+}
+
+export const AMOUNT_ROLE_LABELS = {
+  total: 'С НДС',
+  vat: 'НДС',
+}
+
+export function dateRoleLabel(role) {
+  return DATE_ROLE_LABELS[role] || role || 'Без роли'
+}
+
+export function amountRoleLabel(role) {
+  return AMOUNT_ROLE_LABELS[role] || role || 'Без роли'
+}
+
 export const EDGE_CASE_META = {
   ip_forms: {
     label: 'ИП-формы',
@@ -130,17 +149,32 @@ export const TECH_STACK = [
     tech: 'Apache Kafka 7.5 + Zookeeper',
     detail: 'topic raw-docs, manual offset commit после успешной записи' },
   { component: 'Обработка', icon: 'mdi-cog-transfer-outline', tone: 'warning',
-    tech: 'aiokafka consumer + regex',
+    tech: 'aiokafka consumer + regex + языковая модель',
     detail: 'consumer group transform-mvp, идемпотентный UPSERT по doc_id' },
+  { component: 'Языковая модель (основная)', icon: 'mdi-brain', tone: 'warning',
+    tech: 'Qwen3.5-9B-MLX-4bit · mlx-lm',
+    detail: 'нативно на хосте через mlx_lm.server :8112, классификация + извлечение полей одним запросом' },
+  { component: 'Языковая модель (альтернатива)', icon: 'mdi-cloud-outline', tone: 'warning',
+    tech: 'Sber GigaChat (Lite / Pro / Max)',
+    detail: 'облачный бэкенд, переключается одной env-переменной LLM_BACKEND' },
+  { component: 'OCR (распознавание сканов)', icon: 'mdi-image-text', tone: 'warning',
+    tech: 'PaddleOCR-VL 1.5 · mlx-vlm-server',
+    detail: 'нативно на хосте :8111, текст + таблицы + layout одной моделью' },
   { component: 'База данных', icon: 'mdi-database', tone: 'success',
     tech: 'PostgreSQL 16',
     detail: 'tsvector + GIN для полнотекстового поиска, JSONB для гибких полей' },
   { component: 'Файловое хранилище', icon: 'mdi-folder-multiple-outline', tone: 'success',
     tech: 'Docker named volume',
     detail: 'ключ — sha256 файла, повторная загрузка переиспользует существующий' },
+  { component: 'Сессии и авторизация', icon: 'mdi-shield-key-outline', tone: 'success',
+    tech: 'Redis 7.4',
+    detail: 'refresh-токены (30 дней) + denylist отозванных access-JWT, AOF-persistence' },
   { component: 'Метрики', icon: 'mdi-chart-bell-curve-cumulative', tone: 'secondary',
-    tech: 'Prometheus 2.50 + kafka-exporter',
+    tech: 'Prometheus 2.50 + kafka-exporter + redis-exporter',
     detail: 'scrape interval 15s, custom counters в extract / transform' },
+  { component: 'Системные метрики', icon: 'mdi-server-network', tone: 'secondary',
+    tech: 'cAdvisor 0.47',
+    detail: 'CPU / RAM / диск по контейнерам и по пайплайну в целом' },
   { component: 'Логи', icon: 'mdi-text-search', tone: 'secondary',
     tech: 'Loki 3.3 + Promtail 3.3',
     detail: 'filesystem retention 7 дней, docker_sd_configs автоопределяет контейнеры' },
@@ -149,24 +183,18 @@ export const TECH_STACK = [
     detail: 'provisioned datasources + дашборды, Explore для логов и метрик' },
   { component: 'Деплой', icon: 'mdi-docker', tone: 'secondary',
     tech: 'Docker Compose',
-    detail: '8 контейнеров, всё локально на macOS / Linux' },
+    detail: '15 контейнеров; AI-сервисы (Qwen, PaddleOCR) запускаются нативно на хосте' },
 ]
 
 export const PIPELINE_STAGES = [
-  // Нормальный путь: документ последовательно проходит эти стадии и попадает в БД.
   { id: 'uploaded',              icon: 'mdi-tray-arrow-up',          color: 'info',    phase: 'flow',
     title: 'Загружен',           desc: 'Файл сохранён, ему присвоен идентификатор. Ещё не пошёл в обработку.' },
   { id: 'extracted',             icon: 'mdi-text-box-outline',       color: 'info',    phase: 'flow',
-    title: 'Прочитан',           desc: 'Из файла извлечён текст. Документ передан на анализ.' },
-  { id: 'classified',            icon: 'mdi-shape-outline',          color: 'info',    phase: 'flow',
-    title: 'Классифицирован',    desc: 'Определён вид документа: счёт-фактура, акт, договор и т.п.' },
-  { id: 'validated',             icon: 'mdi-check-circle-outline',   color: 'success', phase: 'flow',
-    title: 'Валидирован',        desc: 'Все ключевые поля извлечены и прошли проверку без ошибок.' },
+    title: 'Обрабатывается',     desc: 'Из файла извлечён текст, документ в Kafka. Дальше: regex-кандидаты (мс) → LLM-извлечение полей и классификация (~16 с) → сверка с regex и валидация (мс) → запись в БД.' },
   { id: 'loaded',                icon: 'mdi-database-check-outline', color: 'success', phase: 'flow',
-    title: 'В БД',               desc: 'Документ полностью обработан и доступен для поиска и просмотра.' },
-  // Альтернативные финалы — достигаются вместо «В БД», когда что-то пошло не так.
+    title: 'В БД',               desc: 'Документ полностью обработан и доступен для поиска, просмотра и редактирования через HITL-форму.' },
   { id: 'validated_with_errors', icon: 'mdi-alert-outline',          color: 'warning', phase: 'alt',
-    title: 'С предупреждением',  desc: 'Документ обработан, но с замечаниями: вид не удалось определить, ИНН не прошёл проверку, дата вне допустимого диапазона. Документ всё равно сохраняется и доступен для просмотра.' },
+    title: 'С предупреждением',  desc: 'Документ обработан, но с замечаниями: тип не определён, ИНН не прошёл проверку, дата вне допустимого диапазона. Документ всё равно сохраняется и доступен для просмотра/правки. Кнопка «Перепроцессить» возвращает его в обработку.' },
   { id: 'failed',                icon: 'mdi-close-circle-outline',   color: 'error',   phase: 'alt',
     title: 'Ошибка',             desc: 'Внутренняя ошибка на любой из стадий: сбой парсера, недоступность базы, неожиданное исключение. Подробности доступны в журнале событий документа.' },
 ]
@@ -181,10 +209,10 @@ export function docTypeOptions(values) {
 }
 
 export const STATUS_META = {
-  uploaded: { label: 'Загружен', color: 'info', icon: 'mdi-tray-arrow-up' },
-  extracted: { label: 'Прочитан', color: 'info', icon: 'mdi-text-box-outline' },
-  classified: { label: 'Классифицирован', color: 'info', icon: 'mdi-shape-outline' },
-  validated: { label: 'Валидирован', color: 'success', icon: 'mdi-check-circle-outline' },
+  uploaded: { label: 'Обрабатывается', color: 'info', icon: 'mdi-cog-sync-outline' },
+  extracted: { label: 'Обрабатывается', color: 'info', icon: 'mdi-cog-sync-outline' },
+  classified: { label: 'Обрабатывается', color: 'info', icon: 'mdi-cog-sync-outline' },
+  validated: { label: 'Обрабатывается', color: 'info', icon: 'mdi-cog-sync-outline' },
   validated_with_errors: { label: 'С предупреждением', color: 'warning', icon: 'mdi-alert-outline' },
   loaded: { label: 'В БД', color: 'success', icon: 'mdi-database-check-outline' },
   failed: { label: 'Ошибка', color: 'error', icon: 'mdi-close-circle-outline' },
@@ -193,6 +221,22 @@ export const STATUS_META = {
 export function statusLabel(s) { return STATUS_META[s]?.label || s || '—' }
 export function statusColor(s) { return STATUS_META[s]?.color || 'default' }
 export function statusIcon(s) { return STATUS_META[s]?.icon || 'mdi-help-circle-outline' }
+
+const TERMINAL_STATUSES = new Set(['loaded', 'validated_with_errors', 'failed'])
+
+export function rowStatusDisplay(item) {
+  const s = item?.status
+  if (TERMINAL_STATUSES.has(s)) {
+    return { label: statusLabel(s), color: statusColor(s), icon: statusIcon(s) }
+  }
+  const stage = item?.last_stage
+  let label
+  if (stage === 'ocr') label = 'Распознавание скана'
+  else if (stage === 'candidates') label = 'Извлечение полей (LLM)'
+  else if (stage === 'llm' || stage === 'classify' || stage === 'reconcile' || stage === 'validate') label = 'Сохранение'
+  else label = 'В очереди на LLM'
+  return { label, color: 'info', icon: 'mdi-cog-sync-outline' }
+}
 
 const amountFormat = new Intl.NumberFormat('ru-RU', {
   minimumFractionDigits: 2,
@@ -207,6 +251,7 @@ export function formatAmount(value, currency) {
 }
 
 export function uploadRowVisual(r) {
+  if (r.cancelled) return { icon: 'mdi-cancel', color: 'medium-emphasis' }
   if (r.deduplicated) return { icon: 'mdi-equal', color: 'info' }
   if (r.final_status === 'loaded') return { icon: 'mdi-check-circle', color: 'success' }
   if (r.final_status === 'validated_with_errors') return { icon: 'mdi-alert-outline', color: 'warning' }
@@ -218,6 +263,7 @@ export function uploadRowVisual(r) {
 }
 
 export function uploadRowLabel(r) {
+  if (r.cancelled) return 'Отменено'
   if (r.deduplicated) return 'Дубль'
   if (r.final_status === 'loaded') return 'В БД'
   if (r.final_status === 'validated_with_errors') return 'С предупреждением'
@@ -225,6 +271,17 @@ export function uploadRowLabel(r) {
   if (r.http_status >= 400) return `Отклонён при загрузке (HTTP ${r.http_status})`
   if (r.http_status === 0 && r.error) return 'Сетевая ошибка'
   return 'Ещё обрабатывается…'
+}
+
+export function uploadRowStageLabel(r) {
+  const stages = r.stages_seen || []
+  const has = (s) => stages.includes(s)
+  if (has('load')) return null
+  if (has('llm')) return 'Сохранение'
+  if (has('candidates')) return 'Извлечение полей (LLM)'
+  if (has('extract')) return 'В очереди на LLM'
+  if (has('ocr')) return 'Распознавание скана'
+  return 'Чтение файла'
 }
 
 export const FILE_ICON_META = {

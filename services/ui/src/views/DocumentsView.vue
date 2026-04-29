@@ -1,5 +1,5 @@
 <script setup>
-import { ref, onMounted, watch, computed } from 'vue'
+import { ref, onMounted, onBeforeUnmount, watch, computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import client from '../api/client.js'
 import {
@@ -9,9 +9,7 @@ import {
   formatAmount,
   fileIcon,
   fileIconColor,
-  statusLabel,
-  statusColor,
-  statusIcon,
+  rowStatusDisplay,
 } from '../utils/format.js'
 
 const route = useRoute()
@@ -64,12 +62,9 @@ const snack = ref({ show: false, text: '', color: 'success' })
 const stats = ref({ total: 0, loaded: 0, warnings: 0, errors: 0 })
 
 const STATUSES = [
-  { value: 'uploaded', title: 'Загружен' },
-  { value: 'extracted', title: 'Прочитан' },
-  { value: 'classified', title: 'Классифицирован' },
-  { value: 'validated', title: 'Валидирован' },
-  { value: 'validated_with_errors', title: 'С предупреждением' },
+  { value: 'extracted', title: 'Обрабатывается' },
   { value: 'loaded', title: 'В БД' },
+  { value: 'validated_with_errors', title: 'С предупреждением' },
   { value: 'failed', title: 'Ошибка' },
 ]
 const TYPES = docTypeOptions(['invoice', 'act', 'contract', 'payment_order', 'waybill', 'upd'])
@@ -123,9 +118,11 @@ async function loadStats() {
   } catch {}
 }
 
-async function load() {
+const TERMINAL_STATUSES = new Set(['loaded', 'validated_with_errors', 'failed'])
+
+async function load({ silent = false } = {}) {
   syncQuery()
-  loading.value = true
+  if (!silent) loading.value = true
   try {
     if (search.value) {
       const { data } = await client.get('/search', { params: { q: search.value, limit: pageSize.value } })
@@ -144,13 +141,36 @@ async function load() {
       total.value = data.total
     }
   } finally {
-    loading.value = false
+    if (!silent) loading.value = false
   }
+}
+
+let pollTimer = null
+async function pollTick() {
+  const hasInflight = items.value.some((i) => !TERMINAL_STATUSES.has(i.status))
+  if (!hasInflight) {
+    stopPolling()
+    return
+  }
+  await Promise.all([load({ silent: true }), loadStats()])
+}
+function startPolling() {
+  if (pollTimer) return
+  pollTimer = setInterval(pollTick, 2500)
+}
+function stopPolling() {
+  if (pollTimer) { clearInterval(pollTimer); pollTimer = null }
 }
 
 watch([status, docType, pageSize], () => { page.value = 1 })
 watch(sortBy, () => { page.value = 1 }, { deep: true })
-watch([page, status, docType, pageSize, sortBy], load, { deep: true })
+watch([page, status, docType, pageSize, sortBy], () => load(), { deep: true })
+
+watch(items, (list) => {
+  const hasInflight = list.some((i) => !TERMINAL_STATUSES.has(i.status))
+  if (hasInflight) startPolling()
+  else stopPolling()
+}, { deep: true })
 
 const isCustomSort = computed(() => {
   const sb = sortBy.value[0]
@@ -267,6 +287,7 @@ function resetColumnWidths() {
 onMounted(async () => {
   await Promise.all([load(), loadStats()])
 })
+onBeforeUnmount(stopPolling)
 </script>
 
 <template>
@@ -431,10 +452,10 @@ onMounted(async () => {
             <v-chip
               size="small"
               variant="tonal"
-              :color="statusColor(item.status)"
-              :prepend-icon="statusIcon(item.status)"
+              :color="rowStatusDisplay(item).color"
+              :prepend-icon="rowStatusDisplay(item).icon"
             >
-              {{ statusLabel(item.status) }}
+              {{ rowStatusDisplay(item).label }}
             </v-chip>
           </template>
           <template #item.created_at="{ item }">

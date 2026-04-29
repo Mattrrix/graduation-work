@@ -22,13 +22,20 @@ from generator.junk import write_junk
 
 from .. import auth
 from ..config import settings
-from .documents import wait_for_pipeline
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
 
 GENERATED_DIR = Path("/data/files/generated")
+_GARBAGE_FILES = {".DS_Store", "Thumbs.db", "desktop.ini"}
+
+
+def _iter_generated_files():
+    return sorted(
+        p for p in GENERATED_DIR.rglob("*")
+        if p.is_file() and not p.name.startswith(".") and p.name not in _GARBAGE_FILES
+    )
 
 
 @router.get("/catalog")
@@ -58,7 +65,7 @@ async def catalog(user: dict = Depends(auth.current_user)) -> dict:
 async def list_generated(user: dict = Depends(auth.current_user)) -> dict:
     if not GENERATED_DIR.exists():
         return {"files": [], "count": 0}
-    files = sorted(p for p in GENERATED_DIR.rglob("*") if p.is_file())
+    files = _iter_generated_files()
     return {
         "files": [
             {
@@ -151,7 +158,7 @@ async def upload_generated(payload: dict = Body(default={}), user: dict = Depend
     if paths_input:
         paths = [Path(p) for p in paths_input]
     else:
-        paths = sorted(p for p in GENERATED_DIR.rglob("*") if p.is_file())
+        paths = _iter_generated_files()
 
     cleanup = bool(payload.get("cleanup", False))
 
@@ -191,16 +198,7 @@ async def upload_generated(payload: dict = Body(default={}), user: dict = Depend
                     "error": f"{type(exc).__name__}: {exc}",
                 })
 
-    doc_ids = [r["doc_id"] for r in results if r.get("doc_id") and not r.get("deduplicated")]
-    final = await wait_for_pipeline(doc_ids)
-    for r in results:
-        r["final_status"] = final.get(r["doc_id"]) if r.get("doc_id") else None
-
-    loaded = sum(1 for r in results if r.get("final_status") == "loaded")
-    warnings = sum(1 for r in results if r.get("final_status") == "validated_with_errors")
-    pipeline_failed = sum(1 for r in results if r.get("final_status") == "failed")
     rejected = len(results) - ok
-    failed_total = pipeline_failed + rejected
 
     if cleanup:
         shutil.rmtree(GENERATED_DIR, ignore_errors=True)
@@ -209,12 +207,8 @@ async def upload_generated(payload: dict = Body(default={}), user: dict = Depend
         "total": len(results),
         "ok": ok,
         "new": new_count,
-        "loaded": loaded,
-        "warnings": warnings,
         "duplicates": dup_count,
-        "failed": failed_total,
         "rejected": rejected,
-        "pipeline_failed": pipeline_failed,
         "results": results,
         "cleaned": cleanup,
     }

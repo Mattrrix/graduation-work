@@ -1,5 +1,5 @@
 <script setup>
-import { ref, onMounted, computed } from 'vue'
+import { ref, onMounted, onBeforeUnmount, computed } from 'vue'
 import client from '../api/client.js'
 import {
   docTypeOptions,
@@ -14,8 +14,39 @@ import {
   statusColor,
   statusLabel,
   uploadRowLabel,
+  uploadRowStageLabel,
   uploadRowVisual,
 } from '../utils/format.js'
+
+const TERMINAL_STATUSES = new Set(['loaded', 'validated_with_errors', 'failed'])
+const VISIBLE_STAGES = [
+  { key: 'extract', label: 'Чтение файла' },
+  { key: 'llm', label: 'Извлечение полей (LLM)' },
+  { key: 'load', label: 'Сохранение' },
+]
+const STAGE_CURRENT_PHASE = {
+  ocr: 0,
+  extract: 1, candidates: 1,
+  llm: 2,
+  classify: 2, reconcile: 2, validate: 2,
+  load: 3,
+}
+function stageLabel(stage) {
+  const p = STAGE_CURRENT_PHASE[stage]
+  if (p === undefined) return stage
+  const idx = Math.min(p, VISIBLE_STAGES.length - 1)
+  return VISIBLE_STAGES[idx].label
+}
+function stageProgress(r) {
+  const stages = r.stages_seen || []
+  if (!stages.length) return 0
+  let cur = 0
+  for (const s of stages) {
+    const p = STAGE_CURRENT_PHASE[s]
+    if (p !== undefined && p > cur) cur = p
+  }
+  return cur
+}
 
 const catalog = ref({
   doc_types: [],
@@ -137,19 +168,32 @@ async function generateMultiSmokeTest() {
   await generate()
 }
 
+const uploadResults = ref([])
+const waitingPipeline = ref(false)
+let pollAbort = null
+
+const loadedCount = computed(() => uploadResults.value.filter((r) => r.ok && !r.deduplicated && r.final_status === 'loaded').length)
+const warningCount = computed(() => uploadResults.value.filter((r) => r.ok && !r.deduplicated && r.final_status === 'validated_with_errors').length)
+const pipelineFailedCount = computed(() => uploadResults.value.filter((r) => r.ok && !r.deduplicated && r.final_status === 'failed').length)
+const dupCount = computed(() => uploadResults.value.filter((r) => r.ok && r.deduplicated).length)
+const rejectedCount = computed(() => uploadResults.value.filter((r) => !r.ok).length)
+
 async function uploadAll() {
   uploadBusy.value = true
   try {
     const { data } = await client.post('/admin/upload-generated', { cleanup: cleanup.value })
     lastUpload.value = data
-    const parts = [`загружено: ${data.loaded}`]
-    if (data.warnings) parts.push(`с предупреждением: ${data.warnings}`)
-    if (data.duplicates) parts.push(`дублей: ${data.duplicates}`)
-    if (data.failed) parts.push(`ошибок: ${data.failed}`)
+    uploadResults.value = (data.results || []).map((r) => ({
+      ...r,
+      ok: r.http_status < 400,
+      final_status: null,
+      stages_seen: [],
+      current_stage: null,
+    }))
     snack.value = {
       show: true,
-      text: `Из ${data.total} — ${parts.join(', ')}`,
-      color: data.failed ? 'error' : data.warnings ? 'warning' : 'success',
+      text: `Запущена обработка: ${data.total} ${data.duplicates ? `· ${data.duplicates} дублей` : ''} ${data.rejected ? `· ${data.rejected} отклонено` : ''}`.trim(),
+      color: data.rejected ? 'warning' : 'success',
     }
     await loadGenerated()
   } catch (e) {
@@ -157,10 +201,94 @@ async function uploadAll() {
   } finally {
     uploadBusy.value = false
   }
+
+  const inflight = uploadResults.value.filter((r) => r.ok && !r.deduplicated && r.doc_id)
+  if (inflight.length) {
+    waitingPipeline.value = true
+    try {
+      await pollUntilDone(180000)
+    } finally {
+      waitingPipeline.value = false
+    }
+  }
 }
+
+async function pollUntilDone(timeoutMs) {
+  const deadline = Date.now() + timeoutMs
+  pollAbort = { stopped: false }
+  while (Date.now() < deadline && !pollAbort.stopped) {
+    const pending = uploadResults.value.filter(
+      (r) => r.ok && r.doc_id && !r.cancelled && !TERMINAL_STATUSES.has(r.final_status || ''),
+    )
+    if (!pending.length) break
+    await refreshBatch(pending.map((r) => r.doc_id))
+    await new Promise((res) => setTimeout(res, 600))
+  }
+  pollAbort = null
+}
+
+async function refreshBatch(docIds) {
+  if (!docIds.length) return
+  try {
+    const { data } = await client.post('/documents/statuses', { doc_ids: docIds })
+    const map = data.items || {}
+    for (const r of uploadResults.value) {
+      if (!r.doc_id) continue
+      const info = map[r.doc_id]
+      if (!info) continue
+      r.final_status = info.status
+      r.stages_seen = info.stages || []
+      r.current_stage = info.last?.stage || null
+      r.current_message = info.last?.message || ''
+      r.current_status = info.last?.status || 'ok'
+    }
+  } catch {}
+}
+
+async function cancelAllInflight() {
+  const ids = []
+  for (const r of uploadResults.value) {
+    if (r.ok && r.doc_id && !TERMINAL_STATUSES.has(r.final_status || '')) {
+      r.cancelled = true
+      ids.push(r.doc_id)
+    }
+  }
+  if (ids.length) {
+    try { await client.post('/documents/bulk-delete', { doc_ids: ids }) } catch {}
+  }
+}
+
+function cancelAllUpload() {
+  if (pollAbort) pollAbort.stopped = true
+  cancelAllInflight()
+}
+
+async function dismissUploadRow(idx) {
+  const r = uploadResults.value[idx]
+  const inflightId =
+    r?.ok && r?.doc_id && !TERMINAL_STATUSES.has(r.final_status || '') ? r.doc_id : null
+  uploadResults.value.splice(idx, 1)
+  if (inflightId) {
+    try { await client.delete(`/documents/${inflightId}`) } catch {}
+  }
+}
+
+function clearUploadResults() {
+  cancelAllUpload()
+  uploadResults.value = []
+}
+
+onBeforeUnmount(() => {
+  if (pollAbort) pollAbort.stopped = true
+})
 
 const rowVisual = uploadRowVisual
 const rowLabel = uploadRowLabel
+const rowStageLabel = uploadRowStageLabel
+
+function isInflight(r) {
+  return r.ok && !r.deduplicated && r.doc_id && !r.cancelled && !TERMINAL_STATUSES.has(r.final_status || '')
+}
 
 async function clearGenerated() {
   clearBusy.value = true
@@ -570,61 +698,117 @@ onMounted(async () => {
               Загрузить все ({{ generated.count }})
             </v-btn>
 
-            <div v-if="lastUpload" class="mt-4">
-              <div class="d-flex flex-wrap" style="gap:8px">
-                <v-chip variant="tonal" color="primary" prepend-icon="mdi-file-multiple-outline">
-                  Всего: <strong class="ml-1">{{ lastUpload.total }}</strong>
+            <div v-if="uploadResults.length" class="mt-4">
+              <div class="d-flex align-center mb-3" style="gap:12px;flex-wrap:wrap">
+                <div class="d-flex align-center" style="gap:8px">
+                  <div class="text-subtitle-2" style="font-weight:600">Результат заливки</div>
+                  <v-progress-circular v-if="waitingPipeline" indeterminate size="16" width="2" color="primary" />
+                  <span v-if="waitingPipeline" class="text-caption text-medium-emphasis">обработка в pipeline…</span>
+                </div>
+                <v-spacer />
+                <v-chip v-if="loadedCount" size="small" variant="tonal" color="success" prepend-icon="mdi-check">
+                  В БД: {{ loadedCount }}
                 </v-chip>
-                <v-chip v-if="lastUpload.loaded" variant="tonal" color="success" prepend-icon="mdi-check-circle">
-                  В БД: <strong class="ml-1">{{ lastUpload.loaded }}</strong>
+                <v-chip v-if="warningCount" size="small" variant="tonal" color="warning" prepend-icon="mdi-alert">
+                  С предупреждением: {{ warningCount }}
                 </v-chip>
-                <v-chip v-if="lastUpload.warnings" variant="tonal" color="warning" prepend-icon="mdi-alert-outline">
-                  С предупреждением: <strong class="ml-1">{{ lastUpload.warnings }}</strong>
+                <v-chip v-if="pipelineFailedCount" size="small" variant="tonal" color="error" prepend-icon="mdi-close-circle">
+                  Ошибка обработки: {{ pipelineFailedCount }}
                 </v-chip>
-                <v-chip v-if="lastUpload.duplicates" variant="tonal" color="info" prepend-icon="mdi-equal">
-                  Дублей: <strong class="ml-1">{{ lastUpload.duplicates }}</strong>
+                <v-chip v-if="dupCount" size="small" variant="tonal" color="info" prepend-icon="mdi-equal">
+                  Дублей: {{ dupCount }}
                 </v-chip>
-                <v-chip v-if="lastUpload.failed" variant="tonal" color="error" prepend-icon="mdi-close-circle">
-                  Ошибок: <strong class="ml-1">{{ lastUpload.failed }}</strong>
+                <v-chip v-if="rejectedCount" size="small" variant="tonal" color="error" prepend-icon="mdi-alert-circle">
+                  Отклонено: {{ rejectedCount }}
                 </v-chip>
+                <v-btn
+                  v-if="uploadBusy || waitingPipeline"
+                  size="small"
+                  variant="tonal"
+                  color="error"
+                  prepend-icon="mdi-stop"
+                  @click="cancelAllUpload"
+                >
+                  Прервать
+                </v-btn>
+                <v-btn
+                  v-else
+                  size="small"
+                  variant="text"
+                  prepend-icon="mdi-broom"
+                  @click="clearUploadResults"
+                >
+                  Очистить
+                </v-btn>
               </div>
-            </div>
 
-            <v-expansion-panels v-if="lastUpload" class="mt-3" variant="accordion">
-              <v-expansion-panel title="Подробный отчёт по файлам" rounded="lg">
-                <v-expansion-panel-text>
-                  <div style="max-height:420px;overflow-y:auto">
-                    <div v-for="(r, i) in lastUpload.results" :key="i" class="queue-item">
-                      <v-icon :color="rowVisual(r).color" size="20">{{ rowVisual(r).icon }}</v-icon>
+              <div style="max-height:520px;overflow-y:auto">
+                <div
+                  v-for="(r, i) in uploadResults"
+                  :key="i"
+                  class="upload-row"
+                  :class="{ 'is-processing': isInflight(r) }"
+                >
+                  <v-icon :color="rowVisual(r).color" size="20">{{ rowVisual(r).icon }}</v-icon>
+                  <div style="flex:1;min-width:0">
+                    <div class="d-flex align-center" style="gap:8px;flex-wrap:wrap">
+                      <span class="name" style="font-weight:500">{{ r.name }}</span>
+                      <v-chip size="x-small" variant="tonal" :color="rowVisual(r).color">
+                        {{ rowLabel(r) }}
+                      </v-chip>
+                      <v-chip
+                        v-if="isInflight(r) && rowStageLabel(r)"
+                        size="x-small"
+                        variant="tonal"
+                        color="info"
+                        prepend-icon="mdi-cog-sync-outline"
+                      >
+                        {{ rowStageLabel(r) }}
+                      </v-chip>
+                    </div>
 
-                      <div style="flex:1;min-width:0">
-                        <div class="d-flex align-center" style="gap:8px;flex-wrap:wrap">
-                          <span class="name" style="font-weight:500">{{ r.name }}</span>
-                          <v-chip size="x-small" variant="tonal" :color="rowVisual(r).color">
-                            {{ rowLabel(r) }}
-                          </v-chip>
-                        </div>
-                        <div class="text-caption text-medium-emphasis" style="margin-top:2px">
-                          <template v-if="r.deduplicated">
-                            оригинал:
-                            <v-chip size="x-small" variant="tonal" :color="statusColor(r.original_status)" class="ml-1">
-                              {{ statusLabel(r.original_status) }}
-                            </v-chip>
-                          </template>
-                          <template v-if="r.doc_id">
-                            <span v-if="r.deduplicated"> · </span>
-                            <router-link :to="`/documents/${r.doc_id}`" style="color:inherit;text-decoration:underline;text-decoration-color:rgba(0,0,0,.2)">
-                              {{ r.doc_id.slice(0, 8) }}…
-                            </router-link>
-                          </template>
-                          <span v-if="r.error" class="text-error"> · {{ r.error }}</span>
-                        </div>
-                      </div>
+                    <div
+                      v-if="isInflight(r)"
+                      class="upload-row-progress"
+                    >
+                      <div
+                        v-for="(stage, idx) in VISIBLE_STAGES"
+                        :key="stage.key"
+                        class="upload-row-progress-cell"
+                        :class="{
+                          'is-done': idx < stageProgress(r),
+                          'is-current': idx === stageProgress(r),
+                        }"
+                        :title="stage.label"
+                      />
+                    </div>
+
+                    <div class="text-caption text-medium-emphasis" style="margin-top:2px">
+                      <template v-if="r.deduplicated">
+                        оригинал:
+                        <v-chip size="x-small" variant="tonal" :color="statusColor(r.original_status)" class="ml-1">
+                          {{ statusLabel(r.original_status) }}
+                        </v-chip>
+                      </template>
+                      <template v-if="r.doc_id">
+                        <span v-if="r.deduplicated"> · </span>
+                        <router-link :to="`/documents/${r.doc_id}`" style="color:inherit;text-decoration:underline;text-decoration-color:rgba(0,0,0,.2)">
+                          {{ r.doc_id.slice(0, 8) }}…
+                        </router-link>
+                      </template>
+                      <span v-if="r.error" class="text-error"> · {{ r.error }}</span>
                     </div>
                   </div>
-                </v-expansion-panel-text>
-              </v-expansion-panel>
-            </v-expansion-panels>
+                  <v-btn
+                    icon="mdi-close"
+                    size="x-small"
+                    variant="text"
+                    :title="r.ok && r.doc_id && !TERMINAL_STATUSES.has(r.final_status || '') ? 'Отменить обработку этого документа' : 'Убрать из списка'"
+                    @click="dismissUploadRow(i)"
+                  />
+                </div>
+              </div>
+            </div>
           </v-card-text>
         </v-card>
       </v-col>

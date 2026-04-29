@@ -1,3 +1,5 @@
+import secrets
+import uuid
 from datetime import datetime, timedelta, timezone
 
 import bcrypt
@@ -5,10 +7,14 @@ import jwt
 from fastapi import Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
 
+from . import db, redis_client
 from .config import settings
-from . import db
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/auth/login", auto_error=False)
+
+REFRESH_PREFIX = "refresh:"
+DENYLIST_PREFIX = "denylist:"
+ACCESS_TYPE = "access"
 
 
 def hash_password(password: str) -> str:
@@ -22,15 +28,19 @@ def verify_password(password: str, password_hash: str) -> bool:
         return False
 
 
-def issue_token(username: str, role: str) -> str:
+def issue_access(username: str, role: str) -> tuple[str, str, int]:
     now = datetime.now(timezone.utc)
+    jti = uuid.uuid4().hex
+    exp = int((now + timedelta(minutes=settings.jwt_expires_min)).timestamp())
     payload = {
         "sub": username,
         "role": role,
+        "type": ACCESS_TYPE,
+        "jti": jti,
         "iat": int(now.timestamp()),
-        "exp": int((now + timedelta(minutes=settings.jwt_expires_min)).timestamp()),
+        "exp": exp,
     }
-    return jwt.encode(payload, settings.jwt_secret, algorithm="HS256")
+    return jwt.encode(payload, settings.jwt_secret, algorithm="HS256"), jti, exp
 
 
 def decode_token(token: str) -> dict:
@@ -40,10 +50,45 @@ def decode_token(token: str) -> dict:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, f"invalid token: {exc}")
 
 
+async def issue_refresh(username: str, role: str) -> str:
+    token = secrets.token_urlsafe(48)
+    ttl = settings.jwt_refresh_days * 86400
+    await redis_client.redis().setex(
+        f"{REFRESH_PREFIX}{token}",
+        ttl,
+        f"{username}|{role}",
+    )
+    return token
+
+
+async def consume_refresh(token: str) -> tuple[str, str] | None:
+    val = await redis_client.redis().get(f"{REFRESH_PREFIX}{token}")
+    if val is None:
+        return None
+    username, role = val.split("|", 1)
+    return username, role
+
+
+async def revoke_refresh(token: str) -> None:
+    await redis_client.redis().delete(f"{REFRESH_PREFIX}{token}")
+
+
+async def revoke_access(jti: str, exp_unix: int) -> None:
+    now = int(datetime.now(timezone.utc).timestamp())
+    ttl = max(exp_unix - now, 1)
+    await redis_client.redis().setex(f"{DENYLIST_PREFIX}{jti}", ttl, "1")
+
+
 async def current_user(token: str | None = Depends(oauth2_scheme)) -> dict:
     if token is None:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "missing token")
-    return decode_token(token)
+    payload = decode_token(token)
+    if payload.get("type") not in (None, ACCESS_TYPE):
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "wrong token type")
+    jti = payload.get("jti")
+    if jti and await redis_client.redis().exists(f"{DENYLIST_PREFIX}{jti}"):
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "token revoked")
+    return payload
 
 
 async def ensure_admin_seed() -> None:

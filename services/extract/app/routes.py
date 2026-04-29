@@ -1,12 +1,15 @@
 import json
 import logging
 import uuid
+from uuid import UUID
 
 import magic
 from fastapi import APIRouter, File, HTTPException, UploadFile
 from prometheus_client import Counter, Histogram
 
 from . import db, kafka_producer, parsers, storage
+from . import ocr as ocr_client
+from .config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -18,6 +21,14 @@ uploads_total = Counter(
     ["mime", "result"],
 )
 parse_seconds = Histogram("extract_parse_seconds", "Parse latency in seconds")
+ocr_seconds = Histogram("extract_ocr_seconds", "OCR latency in seconds")
+ocr_total = Counter(
+    "extract_ocr_total",
+    "OCR fallback invocations on scanned PDFs",
+    ["result"],
+)
+for _r in ("ok", "failed", "disabled"):
+    ocr_total.labels(result=_r)
 
 _KNOWN_RESULTS = ("new", "deduplicated", "parse_failed", "kafka_failed")
 _KNOWN_MIMES = (
@@ -81,6 +92,12 @@ async def upload_document(file: UploadFile = File(...)) -> dict:
     try:
         with parse_seconds.time():
             parsed = parser(content, file.filename or "")
+        if (
+            mime == "application/pdf"
+            and not parsed.get("text")
+            and parsed.get("raw", {}).get("needs_ocr")
+        ):
+            parsed = await _run_ocr(doc_id, content, parsed)
     except Exception as exc:
         logger.warning(
             "parser rejected file (HTTP 422 to client): doc_id=%s mime=%s exc=%s: %s",
@@ -149,3 +166,97 @@ async def upload_document(file: UploadFile = File(...)) -> dict:
 
     uploads_total.labels(mime=mime, result="new").inc()
     return {"doc_id": str(doc_id), "deduplicated": False}
+
+
+async def _run_ocr(doc_id: uuid.UUID, content: bytes, parsed: dict) -> dict:
+    if not settings.ocr_enabled:
+        ocr_total.labels(result="disabled").inc()
+        return parsed
+    try:
+        with ocr_seconds.time():
+            result = await ocr_client.ocr_pdf(content)
+    except ocr_client.OcrError as exc:
+        ocr_total.labels(result="failed").inc()
+        logger.warning("ocr failed: doc_id=%s exc=%s", doc_id, exc)
+        async with db.pool().acquire() as conn:
+            await conn.execute(
+                "INSERT INTO processing_events(doc_id, stage, status, message) VALUES ($1, 'ocr', 'error', $2)",
+                doc_id,
+                f"ocr_failed: {exc}"[:500],
+            )
+        return parsed
+
+    ocr_total.labels(result="ok").inc()
+    raw = dict(parsed.get("raw") or {})
+    raw["ocr"] = {
+        "engine": settings.ocr_model,
+        "pages": result["pages"],
+        "elapsed_s": result["elapsed_s"],
+    }
+    raw["needs_ocr"] = False
+    pages = result["pages"]
+    chars = len(result["text"])
+    elapsed = result["elapsed_s"]
+    page_word = "страница" if pages == 1 else ("страницы" if 2 <= pages <= 4 else "страниц")
+    msg = f"Распознан скан: {pages} {page_word}, извлечено {chars} символов за {elapsed:.1f} с"
+    async with db.pool().acquire() as conn:
+        await conn.execute(
+            "INSERT INTO processing_events(doc_id, stage, status, message) VALUES ($1, 'ocr', 'ok', $2)",
+            doc_id,
+            msg,
+        )
+    return {"text": result["text"], "raw": raw}
+
+
+@router.post("/api/documents/{doc_id}/reprocess", status_code=202)
+async def reprocess_document(doc_id: UUID) -> dict:
+    async with db.pool().acquire() as conn:
+        row = await conn.fetchrow(
+            """
+            SELECT filename, mime_type, sha256, storage_path, text_content, raw
+              FROM documents
+             WHERE doc_id = $1
+            """,
+            doc_id,
+        )
+    if row is None:
+        raise HTTPException(404, "not found")
+    text = row["text_content"]
+    if not text:
+        raise HTTPException(409, "no text_content; cannot reprocess")
+
+    raw = row["raw"]
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw)
+        except json.JSONDecodeError:
+            raw = {}
+
+    async with db.pool().acquire() as conn:
+        await conn.execute(
+            "UPDATE documents SET status = 'extracted', updated_at = NOW() WHERE doc_id = $1",
+            doc_id,
+        )
+        await conn.execute(
+            "INSERT INTO processing_events(doc_id, stage, status, message) VALUES ($1, 'extract', 'ok', 'reprocess_requested')",
+            doc_id,
+        )
+
+    try:
+        await kafka_producer.publish_raw(
+            str(doc_id),
+            {
+                "doc_id": str(doc_id),
+                "filename": row["filename"],
+                "mime": row["mime_type"],
+                "sha256": row["sha256"],
+                "storage_path": row["storage_path"],
+                "text": text,
+                "raw": raw or {},
+            },
+        )
+    except Exception as exc:
+        logger.exception("kafka republish failed for doc_id=%s", doc_id)
+        raise HTTPException(503, f"Kafka publish failed: {type(exc).__name__}")
+
+    return {"doc_id": str(doc_id), "reprocessed": True}

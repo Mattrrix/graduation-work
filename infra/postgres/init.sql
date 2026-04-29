@@ -33,12 +33,19 @@ CREATE TABLE IF NOT EXISTS documents (
 
     raw                 JSONB,
     fields              JSONB,
+    summary             TEXT,
+    summary_detailed    TEXT,
+    vat_rate            NUMERIC(5,2),
     text_content        TEXT,
     text_search         tsvector,
 
     created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at          TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+ALTER TABLE documents ADD COLUMN IF NOT EXISTS summary TEXT;
+ALTER TABLE documents ADD COLUMN IF NOT EXISTS summary_detailed TEXT;
+ALTER TABLE documents ADD COLUMN IF NOT EXISTS vat_rate NUMERIC(5,2);
 
 CREATE INDEX IF NOT EXISTS idx_documents_status      ON documents(status);
 CREATE INDEX IF NOT EXISTS idx_documents_doc_type    ON documents(doc_type);

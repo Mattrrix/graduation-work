@@ -46,38 +46,6 @@ const docTypeRows = computed(() =>
   }))
 )
 
-// Порядок проверки правил классификатора. Сначала самые однозначные заголовки,
-// к низу — более общие фразы, которые могут встречаться внутри других видов.
-const classifierRules = [
-  { id: 'payment_order', label: 'Платёжное поручение',
-    triggers: ['«платежное поручение» / «платёжное поручение»'],
-    note: 'Самый однозначный заголовок, проверяется первым.' },
-  { id: 'upd', label: 'УПД',
-    triggers: ['«универсальный передаточный документ»', '«УПД-...»'],
-    note: 'Уникальная фраза, не встречается в других видах документов.' },
-  { id: 'waybill', label: 'ТОРГ-12',
-    triggers: ['«ТОРГ-12»', '«товарная накладная»'],
-    note: 'Стандартный код формы и устойчивое название накладной — не пересекаются с другими видами.' },
-  { id: 'act', label: 'Акт',
-    triggers: ['«акт № ...» / «акт выполненных» / «акт оказанных» / «акт приёмки» / «акт сдачи»'],
-    note: 'Слово «акт» встречается и в нерелевантных текстах, поэтому ищется только в связке с дополнительным маркером.' },
-  { id: 'contract', label: 'Договор',
-    triggers: ['«договор № ...»', '«контракт № ...»'],
-    note: 'Слово «договор» само по себе общее, но связка с «№» однозначно указывает на заголовок документа.' },
-  { id: 'invoice', label: 'Счёт-фактура',
-    triggers: ['«счёт-фактура» + (№ или цифры)', '«счёт № ...» / «счёт на оплату»'],
-    note: 'Слово «счёт» часто встречается в платёжных поручениях (в назначении платежа), поэтому правило стоит последним.' },
-]
-
-const filenameHints = [
-  { type: 'payment_order', tokens: ['payment_order', 'payment-order', 'плат'] },
-  { type: 'upd',          tokens: ['upd', 'упд'] },
-  { type: 'waybill',      tokens: ['waybill', 'торг', 'накладн'] },
-  { type: 'invoice',      tokens: ['invoice', 'счет', 'счёт'] },
-  { type: 'act',          tokens: ['act', 'акт'] },
-  { type: 'contract',     tokens: ['contract', 'договор'] },
-]
-
 const validators = [
   { code: 'inn', label: 'ИНН',
     check: 'Контрольная сумма по алгоритму ФНС: 10 цифр для юр.лиц, 12 — для индивидуальных предпринимателей.',
@@ -120,10 +88,18 @@ const archRows = [
     ],
   },
   {
+    label: 'AI-сервисы (на хосте)',
+    items: [
+      { name: 'Языковая модель', desc: 'Qwen3.5-9B локально или Sber GigaChat в облаке: классификация и извлечение полей одним запросом', tone: 'warning' },
+      { name: 'OCR', desc: 'PaddleOCR-VL 1.5 распознаёт сканы — текст, таблицы, разметка одной моделью', tone: 'warning' },
+    ],
+  },
+  {
     label: 'Хранилище',
     items: [
       { name: 'База данных', desc: 'Документы, поля, журнал событий, пользователи; поддерживает полнотекстовый поиск', tone: 'success' },
       { name: 'Файловое хранилище', desc: 'Оригиналы загруженных файлов; повторная загрузка использует уже сохранённый файл', tone: 'secondary' },
+      { name: 'Сессии (Redis)', desc: 'Refresh-токены и список отозванных access-токенов; обеспечивает мгновенный logout', tone: 'success' },
     ],
   },
   {
@@ -358,48 +334,23 @@ const tocSections = [
     <!-- 5. Определение вида документа -->
     <section id="classifier" class="ref-section">
       <h2 class="ref-section-title">5. Определение вида документа</h2>
-      <p class="ref-section-sub">Вид документа определяется по характерным фразам в тексте — «Платёжное поручение», «ТОРГ-12», «Универсальный передаточный документ» и т.п. Правила проверяются по очереди, от самых однозначных к более общим. Первое совпадение фиксирует вид. Если ни одно правило не сработало, проверяется имя файла. Если и оно не помогло — вид определить не удалось, документ помечается как «неизвестный тип».</p>
+      <p class="ref-section-sub">Вид документа определяет языковая модель: на вход ей подаётся извлечённый текст и имя файла, на выходе — один из шести типов с числовой оценкой уверенности. Если уверенность ниже порога или модель не смогла соотнести документ ни с одним типом, документ помечается как «неизвестный тип» и получает статус «с предупреждением».</p>
 
-      <div class="ref-block mb-3">
-        <v-table density="compact" class="ref-table">
-          <thead>
-            <tr>
-              <th style="width:6%; text-align:center">№</th>
-              <th style="width:22%">Тип</th>
-              <th>Что ищется в тексте</th>
-              <th style="width:34%">Почему именно так</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr v-for="(r, i) in classifierRules" :key="r.id">
-              <td style="text-align:center"><span class="rule-rank">{{ i + 1 }}</span></td>
-              <td><strong>{{ r.label }}</strong></td>
-              <td>
-                <code v-for="t in r.triggers" :key="t" class="fmt-code d-block mb-1">{{ t }}</code>
-              </td>
-              <td class="text-caption" style="color: rgb(var(--v-theme-on-surface-variant))">{{ r.note || '—' }}</td>
-            </tr>
-          </tbody>
-        </v-table>
+      <div class="ref-block padded mb-3">
+        <div class="text-subtitle-2 mb-2" style="font-weight:600">Как принимается решение</div>
+        <ol class="classifier-steps">
+          <li>Из файла извлекается текст (для сканов — через распознавание).</li>
+          <li>Текст и имя файла отправляются в языковую модель одним запросом — она возвращает структурированный ответ: тип документа, оценка уверенности, контрагенты с ролями, даты, суммы, краткая сводка.</li>
+          <li>Если уверенность <strong>≥ 0.7</strong> — берётся вердикт модели.</li>
+          <li>Если ниже — вид документа не определён. Дополнительно проверяется, нашлось ли в тексте хотя бы одно ключевое поле (ИНН, номер документа или сумма): если ничего нет — это, скорее всего, не бизнес-документ.</li>
+          <li>В обоих случаях («нет типа» или «нет полей») документ сохраняется со статусом «с предупреждением» и кодом <code class="fmt-code">unknown_document_type</code>.</li>
+        </ol>
       </div>
 
       <p class="ref-note">
-        <v-icon size="14" class="mr-1">mdi-arrow-right-bold-outline</v-icon>
-        <strong>Запасной вариант — по имени файла</strong>. Если правил по тексту не хватило, проверяются токены в имени файла:
+        <v-icon size="14" class="mr-1">mdi-information-outline</v-icon>
+        Имя файла участвует в классификации как дополнительная подсказка прямо внутри запроса к модели — отдельных правил «по имени» в коде нет. Это упрощает логику и даёт модели выбирать, насколько доверять имени относительно содержимого.
       </p>
-      <div class="ref-block">
-        <v-table density="compact" class="ref-table">
-          <thead><tr><th style="width:24%">Тип</th><th>Токены в имени файла</th></tr></thead>
-          <tbody>
-            <tr v-for="h in filenameHints" :key="h.type">
-              <td><strong>{{ formatDocType(h.type) }}</strong></td>
-              <td>
-                <code v-for="t in h.tokens" :key="t" class="fmt-code mr-2">{{ t }}</code>
-              </td>
-            </tr>
-          </tbody>
-        </v-table>
-      </div>
     </section>
 
     <!-- 6. Проверка полей -->
@@ -806,6 +757,15 @@ const tocSections = [
   font-size: 0.75rem;
   font-variant-numeric: tabular-nums;
 }
+.classifier-steps {
+  list-style: decimal;
+  padding-left: 22px;
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.65;
+}
+.classifier-steps li { margin-bottom: 4px; }
+.classifier-steps li:last-child { margin-bottom: 0; }
 
 .ec-example {
   margin-top: 10px;

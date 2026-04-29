@@ -4,6 +4,7 @@ from fastapi import APIRouter, Body, Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordRequestForm
 
 from .. import auth, db
+from ..config import settings
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 
@@ -21,6 +22,17 @@ def _profile_dict(row) -> dict:
     }
 
 
+def _token_response(username: str, role: str, access: str, refresh: str) -> dict:
+    return {
+        "access_token": access,
+        "refresh_token": refresh,
+        "token_type": "bearer",
+        "role": role,
+        "username": username,
+        "expires_in": settings.jwt_expires_min * 60,
+    }
+
+
 @router.post("/login")
 async def login(form: OAuth2PasswordRequestForm = Depends()) -> dict:
     async with db.pool().acquire() as conn:
@@ -30,8 +42,39 @@ async def login(form: OAuth2PasswordRequestForm = Depends()) -> dict:
         )
     if row is None or not auth.verify_password(form.password, row["password_hash"]):
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "invalid credentials")
-    token = auth.issue_token(row["username"], row["role"])
-    return {"access_token": token, "token_type": "bearer", "role": row["role"]}
+    access, _, _ = auth.issue_access(row["username"], row["role"])
+    refresh = await auth.issue_refresh(row["username"], row["role"])
+    return _token_response(row["username"], row["role"], access, refresh)
+
+
+@router.post("/refresh")
+async def refresh_token(payload: dict = Body(default={})) -> dict:
+    rtoken = payload.get("refresh_token") if isinstance(payload, dict) else None
+    if not rtoken:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "missing refresh_token")
+    pair = await auth.consume_refresh(rtoken)
+    if pair is None:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "invalid refresh token")
+    username, role = pair
+    await auth.revoke_refresh(rtoken)
+    access, _, _ = auth.issue_access(username, role)
+    new_refresh = await auth.issue_refresh(username, role)
+    return _token_response(username, role, access, new_refresh)
+
+
+@router.post("/logout")
+async def logout(
+    payload: dict = Body(default={}),
+    user: dict = Depends(auth.current_user),
+) -> dict:
+    rtoken = payload.get("refresh_token") if isinstance(payload, dict) else None
+    if rtoken:
+        await auth.revoke_refresh(rtoken)
+    jti = user.get("jti")
+    exp = user.get("exp")
+    if jti and exp:
+        await auth.revoke_access(jti, int(exp))
+    return {"ok": True}
 
 
 @router.get("/me")

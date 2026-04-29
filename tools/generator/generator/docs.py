@@ -236,7 +236,7 @@ def _items(rng: random.Random, count: int | None = None) -> tuple[list[dict], De
         qty = rng.randint(1, 20)
         price = Decimal(rng.randint(50, 50000)) + Decimal(rng.randint(0, 99)) / Decimal(100)
         line_sum = (price * qty).quantize(Decimal("0.01"))
-        vat = (line_sum * Decimal("0.20")).quantize(Decimal("0.01"))
+        vat = (line_sum * Decimal("0.22")).quantize(Decimal("0.01"))
         items.append({
             "name": name,
             "unit": unit,

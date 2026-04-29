@@ -4,7 +4,7 @@
   "tags": ["etl", "thesis"],
   "timezone": "Europe/Moscow",
   "schemaVersion": 39,
-  "version": 4,
+  "version": 6,
   "refresh": "10s",
   "time": { "from": "now-1h", "to": "now" },
   "templating": { "list": [] },
@@ -502,6 +502,457 @@
         "enableLogDetails": true,
         "dedupStrategy": "none",
         "sortOrder": "Descending"
+      }
+    },
+    {
+      "id": 100,
+      "type": "row",
+      "title": "Ресурсы (cAdvisor)",
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 50 },
+      "panels": []
+    },
+    {
+      "id": 13,
+      "type": "timeseries",
+      "title": "CPU по контейнерам (доли ядра)",
+      "description": "rate(container_cpu_usage_seconds_total[1m]) — доля одного ядра. 1.0 = ядро целиком, 2.0 = два. На macOS Docker Desktop cAdvisor работает в Raw-режиме (cgroups), поэтому контейнер обозначен 12-символьным id вместо имени compose-сервиса. `docker ps --format 'table {{.ID}}\\t{{.Names}}'` для расшифровки.",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 51 },
+      "targets": [
+        {
+          "expr": "sum by (container_id) (rate(container_cpu_usage_seconds_total{container_id!~\"|host-vm|all-containers\"}[1m]))",
+          "legendFormat": "{{container_id}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0,
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "showPoints": "never"
+          },
+          "color": { "mode": "palette-classic" }
+        }
+      },
+      "options": {
+        "legend": { "displayMode": "table", "placement": "right", "values": ["mean", "max"] },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      }
+    },
+    {
+      "id": 14,
+      "type": "timeseries",
+      "title": "Память по контейнерам (working set)",
+      "description": "container_memory_working_set_bytes — фактически используемая RAM (без cache). То же, что `docker stats` показывает в колонке MEM USAGE. Контейнер обозначен 12-символьным id (см. описание панели CPU).",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 51 },
+      "targets": [
+        {
+          "expr": "sum by (container_id) (container_memory_working_set_bytes{container_id!~\"|host-vm|all-containers\"})",
+          "legendFormat": "{{container_id}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes",
+          "min": 0,
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 12,
+            "showPoints": "never"
+          },
+          "color": { "mode": "palette-classic" }
+        }
+      },
+      "options": {
+        "legend": { "displayMode": "table", "placement": "right", "values": ["mean", "max"] },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      }
+    },
+    {
+      "id": 15,
+      "type": "timeseries",
+      "title": "Сеть RX / TX по интерфейсам (вся VM)",
+      "description": "Сетевой трафик LinuxKit VM — на macOS Docker Desktop сетевые namespace отдельных контейнеров для cAdvisor недоступны, поэтому показываем суммарно. `eth0` = host-bridge с Mac-ом, `bond0` / `br-*` — внутренние docker-сети между контейнерами pipeline.",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 59 },
+      "targets": [
+        {
+          "expr": "sum by (interface) (rate(container_network_receive_bytes_total{id=\"/\",interface!~\"lo|veth.*|br-.*|gre.*|ip6.*|sit0|tunl0|teql0|ip_vti0|erspan0|dummy0\"}[1m]))",
+          "legendFormat": "RX · {{interface}}",
+          "refId": "A"
+        },
+        {
+          "expr": "sum by (interface) (rate(container_network_transmit_bytes_total{id=\"/\",interface!~\"lo|veth.*|br-.*|gre.*|ip6.*|sit0|tunl0|teql0|ip_vti0|erspan0|dummy0\"}[1m]))",
+          "legendFormat": "TX · {{interface}}",
+          "refId": "B"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "Bps",
+          "min": 0,
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 8,
+            "showPoints": "never"
+          },
+          "color": { "mode": "palette-classic" }
+        }
+      },
+      "options": {
+        "legend": { "displayMode": "table", "placement": "right", "values": ["mean", "max"] },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      }
+    },
+    {
+      "id": 16,
+      "type": "timeseries",
+      "title": "Диск Read / Write по контейнерам",
+      "description": "Файловый I/O в байт/сек. Высокий write на postgres = идёт запись в БД, на extract — сохранение blob'ов в storage_data volume. Контейнер обозначен 12-символьным id (см. описание панели CPU).",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 59 },
+      "targets": [
+        {
+          "expr": "sum by (container_id) (rate(container_fs_reads_bytes_total{container_id!~\"|host-vm|all-containers\"}[1m]))",
+          "legendFormat": "Read · {{container_id}}",
+          "refId": "A"
+        },
+        {
+          "expr": "sum by (container_id) (rate(container_fs_writes_bytes_total{container_id!~\"|host-vm|all-containers\"}[1m]))",
+          "legendFormat": "Write · {{container_id}}",
+          "refId": "B"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "Bps",
+          "min": 0,
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 8,
+            "showPoints": "never"
+          },
+          "color": { "mode": "palette-classic" }
+        }
+      },
+      "options": {
+        "legend": { "displayMode": "table", "placement": "right", "values": ["mean", "max"] },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      }
+    },
+    {
+      "id": 17,
+      "type": "stat",
+      "title": "CPU pipeline (все контейнеры)",
+      "description": "Суммарная нагрузка всех docker-контейнеров pipeline за последнюю минуту, в долях ядра. На M4 Pro 14C: 14.0 = весь CPU занят. Cgroup `/docker` — родитель всех контейнеров.",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 4, "w": 6, "x": 0, "y": 67 },
+      "targets": [
+        {
+          "expr": "sum(rate(container_cpu_usage_seconds_total{container_id=\"all-containers\"}[1m]))",
+          "refId": "A",
+          "legendFormat": "CPU"
+        }
+      ],
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"] },
+        "colorMode": "value",
+        "graphMode": "area",
+        "textMode": "auto"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "orange", "value": 4 },
+              { "color": "red", "value": 10 }
+            ]
+          },
+          "unit": "short",
+          "decimals": 2,
+          "noValue": "0"
+        }
+      }
+    },
+    {
+      "id": 18,
+      "type": "stat",
+      "title": "RAM pipeline (все контейнеры)",
+      "description": "Working-set RAM всех docker-контейнеров pipeline. На 24 GB Mac разумный потолок 8-10 GB (остальное — система + Qwen на хосте через mlx-lm).",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 4, "w": 6, "x": 6, "y": 67 },
+      "targets": [
+        {
+          "expr": "container_memory_working_set_bytes{container_id=\"all-containers\"}",
+          "refId": "A",
+          "legendFormat": "RAM"
+        }
+      ],
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"] },
+        "colorMode": "value",
+        "graphMode": "area",
+        "textMode": "auto"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "orange", "value": 6000000000 },
+              { "color": "red", "value": 10000000000 }
+            ]
+          },
+          "unit": "bytes",
+          "noValue": "0"
+        }
+      }
+    },
+    {
+      "id": 19,
+      "type": "stat",
+      "title": "CPU LinuxKit VM",
+      "description": "Суммарная нагрузка всей виртуалки Docker Desktop, включая системные процессы. Если `CPU pipeline` сильно меньше — есть фоновая нагрузка от Docker Desktop / containerd.",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 4, "w": 6, "x": 12, "y": 67 },
+      "targets": [
+        {
+          "expr": "sum(rate(container_cpu_usage_seconds_total{container_id=\"host-vm\"}[1m]))",
+          "refId": "A",
+          "legendFormat": "VM CPU"
+        }
+      ],
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"] },
+        "colorMode": "value",
+        "graphMode": "area",
+        "textMode": "auto"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "fixed", "fixedColor": "blue" },
+          "unit": "short",
+          "decimals": 2,
+          "noValue": "0"
+        }
+      }
+    },
+    {
+      "id": 20,
+      "type": "stat",
+      "title": "RAM LinuxKit VM",
+      "description": "Working-set RAM виртуалки Docker Desktop. Это то, что видит macOS Activity Monitor для процесса `com.docker.virtualization` (плюс/минус буферы).",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 4, "w": 6, "x": 18, "y": 67 },
+      "targets": [
+        {
+          "expr": "container_memory_working_set_bytes{container_id=\"host-vm\"}",
+          "refId": "A",
+          "legendFormat": "VM RAM"
+        }
+      ],
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"] },
+        "colorMode": "value",
+        "graphMode": "area",
+        "textMode": "auto"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "fixed", "fixedColor": "blue" },
+          "unit": "bytes",
+          "noValue": "0"
+        }
+      }
+    },
+    {
+      "id": 200,
+      "type": "row",
+      "title": "Redis (refresh tokens + revocation)",
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 71 },
+      "panels": []
+    },
+    {
+      "id": 21,
+      "type": "stat",
+      "title": "Активные refresh-токены",
+      "description": "Количество ключей `refresh:*` в Redis. Каждый токен = одна сессия пользователя. TTL 30 дней; refresh-rotation удаляет старый ключ при обмене.",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 4, "w": 6, "x": 0, "y": 72 },
+      "targets": [
+        {
+          "expr": "redis_db_keys{db=\"db0\"}",
+          "refId": "A",
+          "legendFormat": "ключи db0"
+        }
+      ],
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"] },
+        "colorMode": "value",
+        "graphMode": "area",
+        "textMode": "auto"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "fixed", "fixedColor": "purple" },
+          "unit": "short",
+          "noValue": "0"
+        }
+      }
+    },
+    {
+      "id": 22,
+      "type": "stat",
+      "title": "Подключения",
+      "description": "Открытые TCP-соединения к Redis. В норме = 1 (пул из api-сервиса) + 1 (redis-exporter).",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 4, "w": 6, "x": 6, "y": 72 },
+      "targets": [
+        {
+          "expr": "redis_connected_clients",
+          "refId": "A",
+          "legendFormat": "клиенты"
+        }
+      ],
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"] },
+        "colorMode": "value",
+        "graphMode": "area",
+        "textMode": "auto"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "fixed", "fixedColor": "blue" },
+          "unit": "short",
+          "noValue": "0"
+        }
+      }
+    },
+    {
+      "id": 23,
+      "type": "stat",
+      "title": "Память Redis",
+      "description": "Резидентная RSS виртуальной машины Redis (`redis_memory_used_rss_bytes`). С AOF-персистом это включает буфер append-log.",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 4, "w": 6, "x": 12, "y": 72 },
+      "targets": [
+        {
+          "expr": "redis_memory_used_rss_bytes",
+          "refId": "A",
+          "legendFormat": "RSS"
+        }
+      ],
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"] },
+        "colorMode": "value",
+        "graphMode": "area",
+        "textMode": "auto"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "fixed", "fixedColor": "red" },
+          "unit": "bytes",
+          "noValue": "0"
+        }
+      }
+    },
+    {
+      "id": 24,
+      "type": "stat",
+      "title": "Команд / сек",
+      "description": "rate(redis_commands_processed_total[1m]) — сколько SET / GET / DEL / EXISTS Redis обрабатывает в секунду. На MVP-нагрузке 0-2 op/s (login, refresh, проверка denylist на каждом запросе).",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 4, "w": 6, "x": 18, "y": 72 },
+      "targets": [
+        {
+          "expr": "rate(redis_commands_processed_total[1m])",
+          "refId": "A",
+          "legendFormat": "ops/s"
+        }
+      ],
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"] },
+        "colorMode": "value",
+        "graphMode": "area",
+        "textMode": "auto"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "fixed", "fixedColor": "green" },
+          "unit": "short",
+          "decimals": 2,
+          "noValue": "0"
+        }
+      }
+    },
+    {
+      "id": 25,
+      "type": "timeseries",
+      "title": "Команды Redis (ops/sec)",
+      "description": "Суммарная нагрузка на Redis по командам. Всплески ожидаются на login (SETEX refresh) и refresh-rotation (GET + DEL + SETEX). Каждый авторизованный API-запрос делает EXISTS denylist:* — это основная фоновая нагрузка.",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 76 },
+      "targets": [
+        {
+          "expr": "rate(redis_commands_processed_total[1m])",
+          "refId": "A",
+          "legendFormat": "ops/s"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "fixed", "fixedColor": "purple" },
+          "unit": "short",
+          "noValue": "0"
+        }
+      }
+    },
+    {
+      "id": 26,
+      "type": "timeseries",
+      "title": "Использование памяти Redis",
+      "description": "redis_memory_used_bytes — логические данные в памяти; redis_memory_used_rss_bytes — RSS процесса. Дельта = фрагментация + AOF-буферы.",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 76 },
+      "targets": [
+        {
+          "expr": "redis_memory_used_bytes",
+          "refId": "A",
+          "legendFormat": "used"
+        },
+        {
+          "expr": "redis_memory_used_rss_bytes",
+          "refId": "B",
+          "legendFormat": "RSS"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes",
+          "noValue": "0"
+        },
+        "overrides": [
+          { "matcher": { "id": "byName", "options": "used" },
+            "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "blue" } }] },
+          { "matcher": { "id": "byName", "options": "RSS" },
+            "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "red" } }] }
+        ]
       }
     }
   ]

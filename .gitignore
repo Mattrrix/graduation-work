@@ -19,3 +19,6 @@ storage/
 data/
 *.pid
 .runtime/
+
+tools/llm_bench/out/
+tools/llm_bench/.venv/

@@ -1,0 +1,12 @@
+{
+  "doc_type": "payment_order",
+  "doc_number": "156",
+  "doc_date": "2015-10-15",
+  "amount_total": "42000.00",
+  "primary_inn": "2581562456",
+  "primary_kpp": "225566885",
+  "primary_name": "ООО «Мечта»",
+  "all_inns": ["2581562456", "2156225545"],
+  "_source": "https://kub-24.ru/wp-content/uploads/Plategnoe-poruchenie-Obrazets.pdf",
+  "_notes": "Платёжное поручение. Плательщик = ООО Мечта (primary). Получатель ИНН 2156225545 КПП 225985626 (имя получателя в исходном PDF не выписано). НДС в назначении платежа: 7560.00."
+}
