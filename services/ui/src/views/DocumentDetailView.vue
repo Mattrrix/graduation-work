@@ -12,6 +12,7 @@ import {
   statusIcon,
   dateRoleLabel,
   amountRoleLabel,
+  SUBSTAGE_META,
 } from '../utils/format.js'
 
 const props = defineProps({ id: String })
@@ -444,8 +445,11 @@ const reprocessing = ref(false)
 const reprocessError = ref('')
 const TERMINAL_STATUSES = new Set(['loaded', 'validated_with_errors', 'failed'])
 
+// `waiting_llm` — виртуальная стадия: extract есть, candidates ещё нет (сообщение
+// в Kafka, transform-консьюмер не подхватил). Считается done, как только пришёл candidates.
 const REPROCESS_STAGES = [
   { key: 'extract', label: 'Чтение файла' },
+  { key: 'waiting_llm', label: 'В очереди на LLM', virtual: true, doneWhen: 'candidates' },
   { key: 'candidates', label: 'Сбор полей через regex' },
   { key: 'llm', label: 'LLM-извлечение полей' },
   { key: 'classify', label: 'Классификация' },
@@ -462,12 +466,35 @@ const reprocessProgress = computed(() => {
   }
   const recent = extractIdx === -1 ? [] : audit.value.slice(extractIdx)
   const result = REPROCESS_STAGES.map((s) => {
+    if (s.virtual) {
+      const done = recent.some((e) => e.stage === s.doneWhen)
+      return { ...s, done, status: null, message: '', current: false }
+    }
     const ev = recent.find((e) => e.stage === s.key)
     return { ...s, done: !!ev, status: ev?.status || null, message: ev ? friendlyEventMessage(ev) : '', current: false }
   })
   const firstUndone = result.findIndex((s) => !s.done)
   if (firstUndone >= 0) result[firstUndone].current = true
   return result
+})
+
+const liveSubstage = computed(() => {
+  const s = doc.value?.status
+  if (!s || TERMINAL_STATUSES.has(s)) return null
+  const steps = reprocessProgress.value
+  if (steps.find((x) => x.key === 'candidates')?.done && !steps.find((x) => x.key === 'llm')?.done) {
+    return 'llm_running'
+  }
+  if (steps.find((x) => x.key === 'extract')?.done && !steps.find((x) => x.key === 'candidates')?.done) {
+    return 'waiting_llm'
+  }
+  return null
+})
+
+const reprocessChip = computed(() => {
+  const sub = liveSubstage.value
+  if (sub && SUBSTAGE_META[sub]) return SUBSTAGE_META[sub]
+  return { label: 'Обрабатывается', color: 'info', icon: 'mdi-cog-sync-outline' }
 })
 
 async function pollOnce() {
@@ -716,10 +743,10 @@ onMounted(load)
             v-if="reprocessing"
             size="small"
             variant="tonal"
-            color="info"
-            prepend-icon="mdi-cog-sync-outline"
+            :color="reprocessChip.color"
+            :prepend-icon="reprocessChip.icon"
           >
-            Обрабатывается
+            {{ reprocessChip.label }}
           </v-chip>
           <v-chip
             v-else
@@ -796,7 +823,7 @@ onMounted(load)
     >
       <div class="d-flex align-center" style="gap:12px">
         <v-progress-circular indeterminate size="20" width="2" color="info" />
-        <div style="font-weight:600;font-size:14px">Документ обрабатывается…</div>
+        <div style="font-weight:600;font-size:14px">{{ reprocessChip.label }}…</div>
         <v-spacer />
         <v-btn
           size="x-small"

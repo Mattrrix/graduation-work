@@ -75,9 +75,14 @@ SORTABLE_COLUMNS = {
 }
 
 
+SUBSTAGE_PRE_LLM = ("extract", "ocr")  # transform consumer hasn't picked up yet
+SUBSTAGE_LLM_RUNNING = ("candidates",)  # regex done, LLM call in flight
+
+
 @router.get("")
 async def list_documents(
     status: str | None = Query(None),
+    substage: str | None = Query(None),
     doc_type: str | None = Query(None),
     inn: str | None = Query(None),
     limit: int = Query(50, le=200),
@@ -94,6 +99,20 @@ async def list_documents(
         args.append(doc_type); where.append(f"d.doc_type = ${len(args)}")
     if inn:
         args.append(inn); where.append(f"d.counterparty_inn = ${len(args)}")
+    if substage in ("waiting_llm", "llm_running"):
+        last_stage_sql = (
+            "(SELECT e.stage FROM processing_events e "
+            "WHERE e.doc_id = d.doc_id "
+            "ORDER BY e.created_at DESC, e.id DESC LIMIT 1)"
+        )
+        if substage == "waiting_llm":
+            stages = list(SUBSTAGE_PRE_LLM)
+            args.append(stages)
+            where.append(f"({last_stage_sql} IS NULL OR {last_stage_sql} = ANY(${len(args)}))")
+        else:
+            stages = list(SUBSTAGE_LLM_RUNNING)
+            args.append(stages)
+            where.append(f"{last_stage_sql} = ANY(${len(args)})")
     where_sql = (" WHERE " + " AND ".join(where)) if where else ""
 
     if sort_by not in SORTABLE_COLUMNS:

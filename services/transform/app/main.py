@@ -20,7 +20,7 @@ processed = Counter(
 )
 process_seconds = Histogram("transform_process_seconds", "Per-message processing seconds")
 
-_KNOWN_STATUSES = ("loaded", "validated_with_errors", "error")
+_KNOWN_STATUSES = ("loaded", "validated_with_errors", "error", "skipped_deleted")
 _KNOWN_DOC_TYPES = ("invoice", "act", "contract", "waybill", "upd", "payment_order", "unknown")
 for _s in _KNOWN_STATUSES:
     for _t in _KNOWN_DOC_TYPES:
@@ -60,6 +60,12 @@ async def consume(stop_event: asyncio.Event) -> None:
                             status=result["status"],
                             doc_type=result["doc_type"],
                         ).inc()
+                    except asyncpg.exceptions.ForeignKeyViolationError:
+                        logger.info(
+                            "doc deleted mid-pipeline offset=%s — skipping",
+                            record.offset,
+                        )
+                        processed.labels(status="skipped_deleted", doc_type="unknown").inc()
                     except Exception:
                         logger.exception("failed to process message offset=%s", record.offset)
                         processed.labels(status="error", doc_type="unknown").inc()

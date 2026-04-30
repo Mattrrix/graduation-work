@@ -189,8 +189,10 @@ export const TECH_STACK = [
 export const PIPELINE_STAGES = [
   { id: 'uploaded',              icon: 'mdi-tray-arrow-up',          color: 'info',    phase: 'flow',
     title: 'Загружен',           desc: 'Файл сохранён, ему присвоен идентификатор. Ещё не пошёл в обработку.' },
-  { id: 'extracted',             icon: 'mdi-text-box-outline',       color: 'info',    phase: 'flow',
-    title: 'Обрабатывается',     desc: 'Из файла извлечён текст, документ в Kafka. Дальше: regex-кандидаты (мс) → LLM-извлечение полей и классификация (~16 с) → сверка с regex и валидация (мс) → запись в БД.' },
+  { id: 'waiting_llm',           icon: 'mdi-timer-sand',             color: 'info',    phase: 'flow',
+    title: 'В очереди на LLM',   desc: 'Из файла извлечён текст (если это скан без текстового слоя — через OCR PaddleOCR-VL, ~5–9 с/страницу), сообщение поставлено в Kafka. Документ ждёт, пока сервис обработки заберёт его из очереди. Время ожидания зависит от загруженности консьюмера: при пустой очереди — миллисекунды, при пачке загрузок — пока предыдущие документы не пройдут LLM-стадию.' },
+  { id: 'llm_running',           icon: 'mdi-brain',                  color: 'info',    phase: 'flow',
+    title: 'LLM-NER (Извлечение полей)', desc: 'Сервис обработки забрал документ из очереди. Сначала regex быстро (миллисекунды) собирает кандидатов на ИНН, номер, сумму. Затем языковая модель (~2.5–16 с — зависит от backend и длины текста) делает классификацию вида документа, назначает роли контрагентам и пишет краткое резюме. Дальше — сверка с regex (антигаллюцинация), валидация полей и запись в БД (всё миллисекунды).' },
   { id: 'loaded',                icon: 'mdi-database-check-outline', color: 'success', phase: 'flow',
     title: 'В БД',               desc: 'Документ полностью обработан и доступен для поиска, просмотра и редактирования через HITL-форму.' },
   { id: 'validated_with_errors', icon: 'mdi-alert-outline',          color: 'warning', phase: 'alt',
@@ -216,6 +218,23 @@ export const STATUS_META = {
   validated_with_errors: { label: 'С предупреждением', color: 'warning', icon: 'mdi-alert-outline' },
   loaded: { label: 'В БД', color: 'success', icon: 'mdi-database-check-outline' },
   failed: { label: 'Ошибка', color: 'error', icon: 'mdi-close-circle-outline' },
+}
+
+// Подстатусы внутри `extracted` — различаются по `last_stage` из processing_events.
+export const SUBSTAGE_META = {
+  waiting_llm: { label: 'В очереди на LLM', color: 'info', icon: 'mdi-timer-sand' },
+  llm_running: { label: 'LLM-NER (Извлечение полей)', color: 'info', icon: 'mdi-brain' },
+}
+
+// Текущий live-substage по записанным стадиям документа.
+// Возвращает null для терминальных статусов (loaded / validated_with_errors / failed).
+export function deriveSubstage(item) {
+  const s = item?.status
+  if (!s || s === 'loaded' || s === 'validated_with_errors' || s === 'failed') return null
+  const stage = item?.last_stage
+  if (stage === 'candidates') return 'llm_running'
+  if (!stage || stage === 'extract' || stage === 'ocr') return 'waiting_llm'
+  return null
 }
 
 export function statusLabel(s) { return STATUS_META[s]?.label || s || '—' }

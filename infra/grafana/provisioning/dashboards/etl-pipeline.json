@@ -4,7 +4,7 @@
   "tags": ["etl", "thesis"],
   "timezone": "Europe/Moscow",
   "schemaVersion": 39,
-  "version": 6,
+  "version": 7,
   "refresh": "10s",
   "time": { "from": "now-1h", "to": "now" },
   "templating": { "list": [] },
@@ -13,15 +13,15 @@
     {
       "id": 1,
       "type": "stat",
-      "title": "Загружено новых",
-      "description": "Сколько уникальных файлов прошло через extract. Не учитывает дубли и ошибки.",
+      "title": "В базе",
+      "description": "Документы в таблице documents (актуально). Отражает реальное состояние БД, при удалении/отмене уменьшается.",
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "gridPos": { "h": 4, "w": 6, "x": 0, "y": 0 },
       "targets": [
         {
-          "expr": "sum(extract_uploads_total{result=\"new\"})",
+          "expr": "sum(api_documents_in_db)",
           "refId": "A",
-          "legendFormat": "новые"
+          "legendFormat": "всего"
         }
       ],
       "options": {
@@ -42,12 +42,12 @@
       "id": 2,
       "type": "stat",
       "title": "С ошибками",
-      "description": "Документы со статусом failed: extract не смог распарсить файл (битый PDF / пустой файл) либо kafka publish упал.",
+      "description": "Документы со статусом failed в БД: extract не смог распарсить файл, либо обработка завершилась критической ошибкой.",
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "gridPos": { "h": 4, "w": 6, "x": 6, "y": 0 },
       "targets": [
         {
-          "expr": "sum(extract_uploads_total{result=~\"parse_failed|kafka_failed\"})",
+          "expr": "sum(api_documents_in_db{status=\"failed\"})",
           "refId": "A",
           "legendFormat": "ошибок"
         }
@@ -77,12 +77,12 @@
       "id": 3,
       "type": "stat",
       "title": "Обработано успешно",
-      "description": "Документы дошли до статуса loaded — классифицированы, NER без ошибок, записаны в БД.",
+      "description": "Документы со статусом loaded в БД — классифицированы, NER без ошибок, записаны.",
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "gridPos": { "h": 4, "w": 6, "x": 12, "y": 0 },
       "targets": [
         {
-          "expr": "sum(transform_processed_total{status=\"loaded\"})",
+          "expr": "sum(api_documents_in_db{status=\"loaded\"})",
           "refId": "A",
           "legendFormat": "loaded"
         }
@@ -105,12 +105,12 @@
       "id": 4,
       "type": "stat",
       "title": "С предупреждением",
-      "description": "Документы со статусом validated_with_errors: тип не распознан, нет обязательных бизнес-полей, либо невалидный ИНН/дата/сумма.",
+      "description": "Документы со статусом validated_with_errors в БД: тип не распознан, нет обязательных бизнес-полей, либо невалидный ИНН/дата/сумма.",
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "gridPos": { "h": 4, "w": 6, "x": 18, "y": 0 },
       "targets": [
         {
-          "expr": "sum(transform_processed_total{status=\"validated_with_errors\"})",
+          "expr": "sum(api_documents_in_db{status=\"validated_with_errors\"})",
           "refId": "A",
           "legendFormat": "warnings"
         }

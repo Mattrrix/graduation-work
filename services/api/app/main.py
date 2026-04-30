@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from contextlib import asynccontextmanager
 
@@ -5,7 +6,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from prometheus_client import make_asgi_app
 
-from . import auth, db, redis_client
+from . import auth, db, metrics, redis_client
 from .routes import admin as admin_routes
 from .routes import auth as auth_routes
 from .routes import documents as documents_routes
@@ -19,9 +20,16 @@ async def lifespan(app: FastAPI):
     await db.init_pool()
     await redis_client.init_redis()
     await auth.ensure_admin_seed()
+    await metrics.refresh_once()
+    metrics_task = asyncio.create_task(metrics.refresh_loop())
     try:
         yield
     finally:
+        metrics_task.cancel()
+        try:
+            await metrics_task
+        except (asyncio.CancelledError, Exception):
+            pass
         await redis_client.close_redis()
         await db.close_pool()
 

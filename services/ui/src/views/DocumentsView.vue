@@ -62,11 +62,13 @@ const snack = ref({ show: false, text: '', color: 'success' })
 const stats = ref({ total: 0, loaded: 0, warnings: 0, errors: 0 })
 
 const STATUSES = [
-  { value: 'extracted', title: 'Обрабатывается' },
+  { value: 'waiting_llm', title: 'В очереди на LLM' },
+  { value: 'llm_running', title: 'LLM-NER (Извлечение полей)' },
   { value: 'loaded', title: 'В БД' },
   { value: 'validated_with_errors', title: 'С предупреждением' },
   { value: 'failed', title: 'Ошибка' },
 ]
+const SUBSTAGE_VALUES = new Set(['waiting_llm', 'llm_running'])
 const TYPES = docTypeOptions(['invoice', 'act', 'contract', 'payment_order', 'waybill', 'upd'])
 
 const statCards = computed(() => [
@@ -130,7 +132,14 @@ async function load({ silent = false } = {}) {
       total.value = data.items.length
     } else {
       const params = { limit: pageSize.value, offset: (page.value - 1) * pageSize.value }
-      if (status.value) params.status = status.value
+      if (status.value) {
+        if (SUBSTAGE_VALUES.has(status.value)) {
+          params.status = 'extracted'
+          params.substage = status.value
+        } else {
+          params.status = status.value
+        }
+      }
       if (docType.value) params.doc_type = docType.value
       if (sortBy.value.length) {
         params.sort_by = sortBy.value[0].key

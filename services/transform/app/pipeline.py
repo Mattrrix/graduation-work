@@ -143,6 +143,11 @@ async def process(conn: asyncpg.Connection, message: dict) -> dict:
     filename = message.get("filename")
     sha256 = message.get("sha256") or ""
 
+    exists = await conn.fetchval("SELECT 1 FROM documents WHERE doc_id = $1", doc_id)
+    if not exists:
+        logger.info("doc_id=%s deleted before transform — skipping", doc_id)
+        return {"doc_type": "unknown", "status": "skipped_deleted"}
+
     candidates = ner.find_candidates(text)
     doc_type: str | None = None
 

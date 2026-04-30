@@ -1,4 +1,4 @@
-.PHONY: up down logs ps rebuild clean clean-metrics clean-logs clean-obs psql ai-up ai-down ai-status ai-restart bench
+.PHONY: up down logs ps rebuild clean clean-metrics clean-logs clean-obs psql ai-up ai-down ai-status ai-restart bench thesis thesis-watch thesis-clean thesis-shell
 
 # Поднять весь стек (build + up). Идемпотентно — повторный вызов
 # пересобирает образы только если поменялся код или Dockerfile.
@@ -89,3 +89,35 @@ ai-restart:
 bench:
 	QWEN_URL=http://localhost:8112 .venv_ai/bin/python tools/llm_bench/run.py \
 		--count 5 --backends mlx,gigachat --real-dir samples/real
+
+# --- ВКР (LaTeX) -------------------------------------------------------------
+# Сборка пояснительной записки в thesis/build/main.pdf через docker-образ
+# автора шаблона (texlive + xelatex + cm-super + русские пакеты + biber).
+# Локально TeX Live ставить не нужно. Запускать дважды-трижды для разрешения
+# ссылок и оглавления — latexmk сам определяет, нужен ли повторный проход.
+THESIS_IMAGE := ghcr.io/iktovr/diploma-latex-template:latest
+THESIS_DIR   := $(CURDIR)/thesis
+
+thesis:
+	docker run --rm -v "$(THESIS_DIR)":/doc -w /doc $(THESIS_IMAGE) \
+		latexmk -xelatex -interaction=nonstopmode main.tex
+
+# Watch-режим: latexmk сидит в контейнере с -pvc (preview continuously),
+# пересобирает PDF при каждом сохранении любого .tex/.bib. PDF лежит на хосте
+# в thesis/build/main.pdf — открой его в Preview, и macOS сам обновит окно
+# после каждой пересборки (видеть изменения — Cmd+R или просто переключиться
+# на окно Preview). Остановить — Ctrl+C. -view=none нужен, чтобы latexmk
+# не пытался запустить просмотрщик внутри контейнера, где нет DISPLAY.
+thesis-watch:
+	docker run --rm -v "$(THESIS_DIR)":/doc -w /doc $(THESIS_IMAGE) \
+		latexmk -xelatex -pvc -view=none -interaction=nonstopmode main.tex
+
+# Удаляет промежуточные файлы и build/. PDF в build/ тоже удаляется.
+thesis-clean:
+	docker run --rm -v "$(THESIS_DIR)":/doc -w /doc $(THESIS_IMAGE) \
+		latexmk -C
+	rm -rf "$(THESIS_DIR)/build"
+
+# Интерактивный shell внутри образа — для отладки kpathsea / fontconfig.
+thesis-shell:
+	docker run --rm -it -v "$(THESIS_DIR)":/doc -w /doc $(THESIS_IMAGE) bash
